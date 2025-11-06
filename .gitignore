@@ -26,8 +26,11 @@ Makefile.in
 !m4/
 
 # Binaries
-RNAShiftAlign
-test_*
+/RNAShiftAlign
+/src/RNAShiftAlign.o
+test_shiftmatrix_m
+test_shiftmatrix_d
+test_shift_scoring
 *.exe
 
 # Editor/IDE files
