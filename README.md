@@ -31,6 +31,20 @@ Alignments of Nucleic Acids" by Waldl et al., implementing:
 
 This is a ground-up implementation based on LocARNA, developed in a test-driven manner.
 
+**Current Version:** 0.1.0
+**Current Branch:** `main` (stable), `develop` (active development)
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and changes.
+
+## Contributing
+
+We use a Git Flow branching model:
+- **`main`**: Stable releases only
+- **`develop`**: Active development
+- **`feature/*`**: Individual features
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
 ## Building
 
 Dependencies:
