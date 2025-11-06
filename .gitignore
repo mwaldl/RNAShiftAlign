@@ -1,0 +1,41 @@
+# Build artifacts
+_build/
+_inst/
+*.o
+*.lo
+*.la
+.libs/
+.deps/
+
+# Autotools generated files
+Makefile
+Makefile.in
+/config.h
+/config.h.in
+/config.log
+/config.status
+/configure
+/autom4te.cache/
+/aclocal.m4
+/compile
+/depcomp
+/install-sh
+/missing
+/stamp-h1
+*.m4
+!m4/
+
+# Binaries
+RNAShiftAlign
+test_*
+*.exe
+
+# Editor/IDE files
+*~
+.*.swp
+.vscode/
+.idea/
+
+# Test results
+*.log
+*.trs
