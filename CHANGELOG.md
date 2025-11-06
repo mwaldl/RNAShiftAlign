@@ -46,47 +46,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Documentation**
   - README.md with project overview
-  - Inline code documentation (Doxygen-ready)
+  - CONTRIBUTING.md with development guidelines
   - CHANGELOG.md (this file)
-  - Planning documents in separate directory
+  - Inline code documentation (Doxygen-ready)
 
-### Changed from RNAbialign
+### Implementation Details
 
-#### Build System Improvements
-- **configure.ac**: Use modern `AC_CONFIG_HEADERS` instead of deprecated `AM_CONFIG_HEADER`
-- **configure.ac**: Added `subdir-objects` to `AM_INIT_AUTOMAKE` for proper subdirectory handling
-- **.gitignore**: Specific test binary names instead of wildcard `test_*` to avoid ignoring test source files
-- **.gitignore**: Added `/RNAShiftAlign` path prefix to only ignore binary in root directory
-- **Main binary**: Added version string and informative output messages
+#### Build System
+- Modern autotools configuration with `AC_CONFIG_HEADERS` and `subdir-objects`
+- Proper LocARNA library integration via pkg-config
+- Clean .gitignore for build artifacts and test binaries
+- Separate test binary per component for modularity
 
-#### ShiftMatrixM Critical Fixes
-- **🐛 CRITICAL BUG FIX**: Constructor memory allocation
-  - **Before**: `mat_(adim * bdim * (maxshift * 2 + 1) * 2)` ❌
-  - **After**: `mat_(adim * bdim * (maxshift * 2 + 1) * (maxshift * 2 + 1))` ✅
-  - **Impact**: Was allocating 2× memory instead of (2δ+1)² for offset dimensions
-  - **Result**: Would have caused memory corruption or access violations
-
-#### ShiftMatrixM Code Quality Improvements
-- **Header guard**: Changed from `LOCARNA_SHIFTMATRIX_M_HH` to `RNASHIFTALIGN_SHIFTMATRIX_M_HH` to prevent conflicts
-- **Documentation**: Full Doxygen documentation for all methods and parameters
-- **Error messages**:
-  - Added context to exception messages (parameter names and constraint descriptions)
-  - Better formatting with spaces for readability
-  - Explicit constraint descriptions (e.g., "[y1-maxshift, y1+maxshift]")
-- **Shift calculation**:
-  - **Before**: `std::max(y1, y3) - std::min(y1, y3) > maxshift_`
-  - **After**: `size_type shift_a = (y1 > y3) ? (y1 - y3) : (y3 - y1);`
-  - **Benefit**: More efficient, clearer variable naming
-- **Redundant checks removed**: Removed `y < 0` checks for `size_type` (unsigned type, always ≥ 0)
-- **fill() method**: Use `std::fill()` instead of manual loop (more idiomatic, potentially better optimized)
-- **Includes**: Only include headers that are actually used
-  - Added: `<stdexcept>`, `<string>`, `<tuple>`
-  - Removed: `<assert.h>` (not used)
+#### ShiftMatrixM Design
+- **Memory allocation**: Correct sizing with `(2*maxshift+1)²` for offset dimensions
+- **Header guard**: Uses `RNASHIFTALIGN_` prefix to avoid namespace conflicts
+- **Documentation**: Comprehensive Doxygen documentation for all methods
+- **Error handling**: Descriptive exception messages with parameter context
+- **Efficient shift calculation**: Direct conditional instead of min/max functions
+- **Type safety**: Proper use of unsigned `size_type` without redundant checks
+- **Modern C++**: Uses `std::fill()` and other standard algorithms
+- **Clean includes**: Only necessary headers (`<stdexcept>`, `<string>`, `<tuple>`)
 
 #### Test Infrastructure
-- **test_main.cc**: Proper Catch2 main implementation (was empty in RNAbialign)
-- **Test organization**: One test binary per component instead of combined test binary
-- **Test coverage**: Significantly expanded from 3 sections to 7 sections
+- Proper Catch2 main implementation in dedicated test_main.cc
+- One test binary per component for better organization
+- Comprehensive test coverage (7 test sections, 20+ test cases)
 
 ### Technical Details
 
@@ -133,11 +118,10 @@ Test-driven development approach:
 ## References
 
 - **Paper**: "Incongruences Between Sequence and Secondary Structure Alignments of Nucleic Acids"
-  - Waldl et al. (draft in `../paper/shiftSankoff.pdf`)
-- **Base implementation**: LocARNA (Sankoff-style RNA alignment)
-  - Source: `../LocARNA/`
-- **Previous development**: RNAbialign prototype
-  - Source: `../RNAbialign/`
+  - Waldl et al. (draft)
+- **LocARNA**: Base library for Sankoff-style RNA alignment
+  - Used for: Scoring, RnaData, BasePairs, and other utilities
+- **Development notes**: See planning_docs/ directory (not in repository)
 
 ---
 
