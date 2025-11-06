@@ -39,3 +39,4 @@ test_*
 # Test results
 *.log
 *.trs
+IMPLEMENTATION_PLAN.md
