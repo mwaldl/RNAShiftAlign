@@ -26,7 +26,7 @@ Makefile.in
 !m4/
 
 # Binaries
-/RNAShiftAlign
+/rnashiftalign
 /src/RNAShiftAlign.o
 test_shiftmatrix_m
 test_shiftmatrix_d
