@@ -131,5 +131,5 @@ Test-driven development approach:
 
 ---
 
-[Unreleased]: https://github.com/user/RNAShiftAlign/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/user/RNAShiftAlign/releases/tag/v0.1.0
+[Unreleased]: https://github.com/mwaldl/RNAShiftAlign/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/mwaldl/RNAShiftAlign/releases/tag/v0.1.0
