@@ -7,11 +7,61 @@
 #include <LocARNA/rna_data.hh>
 #include <LocARNA/scoring.hh>
 #include <LocARNA/aligner_params.hh>
+#include <LocARNA/arc_matches.hh>
 
 #include "shiftmatrix_m.hh"
 #include "shift_scoring.hh"
 
 namespace RNAShiftAlign {
+
+/**
+ * @brief Parameters for RNA structure preprocessing
+ *
+ * Controls base pair probability computation and arc match filtering.
+ */
+struct PreprocessingParams {
+    double min_prob;              ///< Minimum base pair probability (default: 0.0005)
+    double max_bps_length_ratio;  ///< Max base pairs / sequence length (default: 0.0)
+    int max_diff_am;              ///< Max arc length difference (default: -1 = off)
+    int max_diff_at_am;           ///< Max position difference at arc ends (default: -1 = off)
+
+    PreprocessingParams()
+        : min_prob(0.0005),
+          max_bps_length_ratio(0.0),
+          max_diff_am(-1),
+          max_diff_at_am(-1) {}
+};
+
+/**
+ * @brief Parameters for alignment scoring and algorithm
+ *
+ * Defines match/mismatch scores, gap costs, structure weights, and shift parameters.
+ */
+struct ScoringParams {
+    // Base scoring
+    int match;           ///< Base match score (default: 50)
+    int mismatch;        ///< Base mismatch score (default: 0)
+    int indel;           ///< Gap penalty (default: -150)
+    int indel_opening;   ///< Gap opening penalty (default: -500, unused for linear gaps)
+
+    // Structure scoring
+    int struct_weight;   ///< Structure contribution weight (default: 200)
+    int tau_factor;      ///< Sequence contribution to arc matches (default: 0)
+
+    // Shift parameters
+    int delta;           ///< Shift penalty (Δ) for gap pattern mismatches (default: 100)
+    int max_shifts;      ///< Maximum allowed shifts (δ_max heuristic) (default: 5)
+
+    ScoringParams()
+        : match(50),
+          mismatch(0),
+          indel(-150),
+          indel_opening(-500),
+          struct_weight(200),
+          tau_factor(0),
+          delta(100),
+          max_shifts(5) {}
+};
 
 /**
  * @brief Sankoff-style bi-aligner for detecting incongruent RNA evolution
@@ -38,20 +88,22 @@ public:
     /**
      * @brief Construct aligner for two RNA sequences
      *
-     * For the skeleton: stores sequences and allocates DP matrices.
-     * TODO: Add LocARNA preprocessing when implementing recursion:
-     * - Compute base pairing probabilities (RnaData)
-     * - Initialize scoring scheme (Scoring with ArcMatches)
+     * Performs complete preprocessing pipeline:
+     * 1. Computes base pairing probabilities via ViennaRNA partition function
+     * 2. Extracts significant base pairs (filtered by min_prob)
+     * 3. Computes valid arc matches between sequences
+     * 4. Initializes scoring scheme for base matches and arc matches
+     * 5. Allocates shift-aware dynamic programming matrices
      *
-     * @param seqA First RNA sequence
-     * @param seqB Second RNA sequence
-     * @param delta Shift penalty parameter (Δ)
-     * @param max_shifts Maximum allowed number of shift positions (δ_max heuristic)
+     * @param seqA First RNA sequence (ACGU alphabet)
+     * @param seqB Second RNA sequence (ACGU alphabet)
+     * @param prep_params Preprocessing parameters (base pair probabilities, filtering)
+     * @param scoring_params Scoring parameters (match/mismatch, gaps, structure, shifts)
      */
     ShiftAligner(const std::string &seqA,
                  const std::string &seqB,
-                 score_t delta,
-                 size_type max_shifts);
+                 const PreprocessingParams &prep_params = PreprocessingParams(),
+                 const ScoringParams &scoring_params = ScoringParams());
 
     /**
      * @brief Perform bi-alignment computation
@@ -82,16 +134,24 @@ public:
     const LocARNA::Sequence& get_seqB() const { return *seqB_; }
 
     /**
-     * @brief Get shift penalty parameter
+     * @brief Get RNA data for sequence A (base pair probabilities)
      */
-    score_t get_delta() const { return shift_scoring_.get_delta(); }
+    const LocARNA::RnaData& get_rna_dataA() const { return *rna_dataA_; }
 
     /**
-     * @brief Get maximum number of allowed shifts
-     *
-     * Returns δ_max, the constraint on |y1-y3| and |y2-y4|.
+     * @brief Get RNA data for sequence B (base pair probabilities)
      */
-    size_type get_max_shifts() const { return max_shifts_; }
+    const LocARNA::RnaData& get_rna_dataB() const { return *rna_dataB_; }
+
+    /**
+     * @brief Get arc matches between sequences
+     */
+    const LocARNA::ArcMatches& get_arc_matches() const { return *arc_matches_; }
+
+    /**
+     * @brief Get LocARNA scoring object
+     */
+    const LocARNA::Scoring& get_scoring() const { return *locarna_scoring_; }
 
     /**
      * @brief Get computed alignment score
@@ -105,9 +165,10 @@ private:
     std::unique_ptr<LocARNA::Sequence> seqA_;
     std::unique_ptr<LocARNA::Sequence> seqB_;
 
-    // Preprocessing data (to be initialized when implementing recursion)
+    // Preprocessing data
     std::unique_ptr<LocARNA::RnaData> rna_dataA_;
     std::unique_ptr<LocARNA::RnaData> rna_dataB_;
+    std::unique_ptr<LocARNA::ArcMatches> arc_matches_;
 
     // Scoring
     std::unique_ptr<LocARNA::Scoring> locarna_scoring_;
