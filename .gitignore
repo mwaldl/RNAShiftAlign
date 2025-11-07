@@ -31,6 +31,7 @@ Makefile.in
 test_shiftmatrix_m
 test_shiftmatrix_d
 test_shift_scoring
+test_shift_aligner
 *.exe
 
 # Editor/IDE files
@@ -43,3 +44,7 @@ test_shift_scoring
 *.log
 *.trs
 IMPLEMENTATION_PLAN.md
+
+# Local build scripts (personal, not for repo)
+build.sh
+BUILD_SETUP.md
