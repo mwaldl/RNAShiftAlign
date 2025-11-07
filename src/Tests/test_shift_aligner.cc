@@ -4,80 +4,151 @@
 using namespace RNAShiftAlign;
 using score_t = ShiftAligner::score_t;
 
-TEST_CASE("ShiftAligner - Constructor and initialization", "[shift_aligner]") {
+TEST_CASE("ShiftAligner - Basic construction", "[shift_aligner]") {
     std::string seqA = "GCGCGC";
     std::string seqB = "GCGCGC";
 
-    SECTION("Construct with simple sequences") {
-        ShiftAligner aligner(seqA, seqB, score_t(100), 2);
+    SECTION("Construct with default parameters") {
+        ShiftAligner aligner(seqA, seqB);
+
+        // Verify sequences are stored correctly
+        CHECK(aligner.get_seqA().length() == 6);
+        CHECK(aligner.get_seqB().length() == 6);
+
+        // Initial score should be 0
+        CHECK(aligner.get_score() == score_t(0));
+    }
+
+    SECTION("Construct with custom parameters") {
+        PreprocessingParams prep_params;
+        prep_params.min_prob = 0.001;
+        prep_params.max_diff_am = 30;
+
+        ScoringParams scoring_params;
+        scoring_params.match = 100;
+        scoring_params.mismatch = -50;
+        scoring_params.indel = -200;
+        scoring_params.struct_weight = 150;
+
+        ShiftAligner aligner(seqA, seqB, prep_params, scoring_params);
 
         CHECK(aligner.get_seqA().length() == 6);
         CHECK(aligner.get_seqB().length() == 6);
-        CHECK(aligner.get_delta() == score_t(100));
-        CHECK(aligner.get_max_shifts() == 2);
+    }
+}
+
+TEST_CASE("ShiftAligner - Preprocessing components", "[shift_aligner]") {
+    // Use a sequence that can form base pairs
+    std::string seqA = "GCGCGCGC";
+    std::string seqB = "GUGCGCAC";
+
+    ShiftAligner aligner(seqA, seqB);
+
+    SECTION("RnaData is initialized") {
+        const auto& rna_dataA = aligner.get_rna_dataA();
+        const auto& rna_dataB = aligner.get_rna_dataB();
+
+        // RnaData should have sequences matching input
+        CHECK(rna_dataA.sequence().length() == 8);
+        CHECK(rna_dataB.sequence().length() == 8);
+
+        // RnaData should have computed arc cutoff probabilities
+        CHECK(rna_dataA.arc_cutoff_prob() > 0.0);
+        CHECK(rna_dataB.arc_cutoff_prob() > 0.0);
     }
 
-    SECTION("Construct with different max_shifts") {
-        ShiftAligner aligner1(seqA, seqB, score_t(100), 0);
-        ShiftAligner aligner2(seqA, seqB, score_t(100), 5);
+    SECTION("RnaData computes base pair list correctly") {
+        // Use a sequence with a clear hairpin structure
+        // ACCCCAAAAGGGGA should form pairs in the stem: (2,13), (3,12), (4,11), (5,10)
+        // Note: ViennaRNA uses 1-based indexing
+        std::string hairpin_seq = "ACCCCAAAAGGGGA";
+        ShiftAligner hairpin_aligner(hairpin_seq, hairpin_seq);
 
-        CHECK(aligner1.get_max_shifts() == 0);
-        CHECK(aligner2.get_max_shifts() == 5);
+        const auto& rna_data = hairpin_aligner.get_rna_dataA();
+
+        // Get the pair list from RnaData - this is a unique_ptr to vrna_elem_prob_s array
+        // Each element has fields: i (first position), j (second position), p (probability)
+        // The list is terminated by an entry with i == 0
+        const auto& plist_ptr = rna_data.plist();
+
+        // First, let's see what pairs are actually computed
+        std::vector<std::pair<int, int>> found_pairs;
+        for (int idx = 0; plist_ptr[idx].i != 0; ++idx) {
+            found_pairs.push_back({plist_ptr[idx].i, plist_ptr[idx].j});
+        }
+
+        // Expected stem pairs for ACCCCAAAAGGGGA
+        // The hairpin should have C-G pairs in the stem
+        // Sequence: A C C C C A A A A G G G G A
+        // Positions: 1 2 3 4 5 6 7 8 9 10 11 12 13 14
+        // Expected structure: .((((....)))).
+        // Expected pairs: (2,13), (3,12), (4,11), (5,10)
+        std::vector<std::pair<int, int>> expected_pairs = {
+            {2, 13},
+            {3, 12},
+            {4, 11},
+            {5, 10}
+        };
+
+        // Check that we found at least some pairs
+        REQUIRE(found_pairs.size() > 0);
+
+        // Check that all expected stem pairs are present
+        // ViennaRNA computes all pairs with probability > threshold, so there may be
+        // additional low-probability pairs beyond the MFE structure
+        for (const auto& expected : expected_pairs) {
+            bool found = false;
+            for (const auto& actual : found_pairs) {
+                if (actual.first == expected.first && actual.second == expected.second) {
+                    found = true;
+                    break;
+                }
+            }
+            INFO("Expected stem pair (" << expected.first << "," << expected.second << ") not found");
+            CHECK(found);
+        }
     }
 
-    SECTION("Construct with different delta values") {
-        ShiftAligner aligner1(seqA, seqB, score_t(50), 2);
-        ShiftAligner aligner2(seqA, seqB, score_t(200), 2);
+    SECTION("ArcMatches is initialized") {
+        const auto& arc_matches = aligner.get_arc_matches();
 
-        CHECK(aligner1.get_delta() == score_t(50));
-        CHECK(aligner2.get_delta() == score_t(200));
+        // Arc matches should be accessible (may be empty for short sequences)
+        // Just verify it doesn't crash
+        size_t num_matches = arc_matches.num_arc_matches();
+        CHECK(num_matches >= 0);
+    }
+
+    SECTION("Scoring is initialized") {
+        const auto& scoring = aligner.get_scoring();
+
+        // Verify scoring object is functional
+        // Test base match scoring
+        CHECK(scoring.basematch(1, 1) >= 0);  // Matching position should have positive score
     }
 }
 
 TEST_CASE("ShiftAligner - Different sequence lengths", "[shift_aligner]") {
     SECTION("Equal length sequences") {
-        ShiftAligner aligner("AAAA", "UUUU", score_t(100), 2);
+        ShiftAligner aligner("AAAA", "UUUU");
         CHECK(aligner.get_seqA().length() == 4);
         CHECK(aligner.get_seqB().length() == 4);
     }
 
     SECTION("Sequence A longer") {
-        ShiftAligner aligner("AAAAAAAA", "UUUU", score_t(100), 2);
+        ShiftAligner aligner("AAAAAAAA", "UUUU");
         CHECK(aligner.get_seqA().length() == 8);
         CHECK(aligner.get_seqB().length() == 4);
     }
 
     SECTION("Sequence B longer") {
-        ShiftAligner aligner("AAAA", "UUUUUUUU", score_t(100), 2);
+        ShiftAligner aligner("AAAA", "UUUUUUUU");
         CHECK(aligner.get_seqA().length() == 4);
         CHECK(aligner.get_seqB().length() == 8);
     }
 }
 
-TEST_CASE("ShiftAligner - Sequence content", "[shift_aligner]") {
-
-    SECTION("Sequences are correctly stored") {
-        std::string seqA = "GCAUCG";
-        std::string seqB = "GUAUCG";
-
-        ShiftAligner aligner(seqA, seqB, score_t(100), 2);
-
-        // Sequences should be stored with correct lengths
-        CHECK(aligner.get_seqA().length() == 6);
-        CHECK(aligner.get_seqB().length() == 6);
-
-        // Verify we can access the sequence objects
-        const auto& seq_a = aligner.get_seqA();
-        const auto& seq_b = aligner.get_seqB();
-
-        // Both sequences should be valid
-        CHECK(seq_a.length() > 0);
-        CHECK(seq_b.length() > 0);
-    }
-}
-
 TEST_CASE("ShiftAligner - Stub methods", "[shift_aligner]") {
-    ShiftAligner aligner("GCGC", "GCGC", score_t(100), 2);
+    ShiftAligner aligner("GCGC", "GCGC");
 
     SECTION("align() returns a score (currently stub)") {
         // Currently fill_M_unpaired is empty, so this will just
@@ -95,16 +166,5 @@ TEST_CASE("ShiftAligner - Stub methods", "[shift_aligner]") {
 
     SECTION("get_score() before align() returns initial value") {
         CHECK(aligner.get_score() == score_t(0));
-    }
-}
-
-TEST_CASE("ShiftAligner - Zero max_shifts edge case", "[shift_aligner]") {
-
-    SECTION("max_shifts = 0 means no shifts allowed") {
-        ShiftAligner aligner("GC", "GC", score_t(100), 0);
-        CHECK(aligner.get_max_shifts() == 0);
-
-        // With max_shifts = 0, only M(i,j,i,j) entries are valid
-        // This means U and V must be identical (no shift allowed)
     }
 }
