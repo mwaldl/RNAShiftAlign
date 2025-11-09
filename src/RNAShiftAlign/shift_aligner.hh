@@ -160,6 +160,26 @@ public:
      */
     score_t get_score() const { return alignment_score_; }
 
+    /**
+     * @brief Get alignment U (sequence layer)
+     *
+     * Only valid after traceback() has been called.
+     * @return Pair of aligned sequences (seqA with gaps, seqB with gaps)
+     */
+    std::pair<std::string, std::string> get_alignment_U() const {
+        return {alignment_U_seqA_, alignment_U_seqB_};
+    }
+
+    /**
+     * @brief Get alignment V (structure layer)
+     *
+     * Only valid after traceback() has been called.
+     * @return Pair of aligned sequences (seqA with gaps, seqB with gaps)
+     */
+    std::pair<std::string, std::string> get_alignment_V() const {
+        return {alignment_V_seqA_, alignment_V_seqB_};
+    }
+
 private:
     // Sequences
     std::unique_ptr<LocARNA::Sequence> seqA_;
@@ -182,6 +202,12 @@ private:
 
     // Results
     score_t alignment_score_;  ///< Computed optimal score
+
+    // Alignment storage (populated by traceback)
+    std::string alignment_U_seqA_;  ///< Sequence A in alignment U (with gaps)
+    std::string alignment_U_seqB_;  ///< Sequence B in alignment U (with gaps)
+    std::string alignment_V_seqA_;  ///< Sequence A in alignment V (with gaps)
+    std::string alignment_V_seqB_;  ///< Sequence B in alignment V (with gaps)
 
     /**
      * @brief Fill M matrix for unpaired-only alignment

@@ -158,10 +158,24 @@ TEST_CASE("ShiftAligner - Basic alignment", "[shift_aligner]") {
         CHECK(score > score_t(0));
     }
 
-    SECTION("traceback() runs without crashing (currently stub)") {
+    SECTION("traceback() reconstructs alignment for identical sequences") {
         ShiftAligner aligner("GCGC", "GCGC");
-        // Should not throw even though it's a stub
-        REQUIRE_NOTHROW(aligner.traceback());
+        aligner.align();
+        aligner.traceback();
+
+        // Get alignments
+        auto [u_seqA, u_seqB] = aligner.get_alignment_U();
+        auto [v_seqA, v_seqB] = aligner.get_alignment_V();
+
+        // For identical sequences, optimal is U=V with no gaps
+        CHECK(u_seqA == "GCGC");
+        CHECK(u_seqB == "GCGC");
+        CHECK(v_seqA == "GCGC");
+        CHECK(v_seqB == "GCGC");
+
+        // U and V should be identical (no shifts)
+        CHECK(u_seqA == v_seqA);
+        CHECK(u_seqB == v_seqB);
     }
 
     SECTION("get_score() before align() returns initial value") {
