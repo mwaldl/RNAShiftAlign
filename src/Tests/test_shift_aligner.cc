@@ -158,10 +158,24 @@ TEST_CASE("ShiftAligner - Basic alignment", "[shift_aligner]") {
         CHECK(score > score_t(0));
     }
 
-    SECTION("traceback() runs without crashing (currently stub)") {
+    SECTION("traceback() reconstructs alignment for identical sequences") {
         ShiftAligner aligner("GCGC", "GCGC");
-        // Should not throw even though it's a stub
-        REQUIRE_NOTHROW(aligner.traceback());
+        aligner.align();
+        aligner.traceback();
+
+        // Get alignments
+        auto [u_seqA, u_seqB] = aligner.get_alignment_U();
+        auto [v_seqA, v_seqB] = aligner.get_alignment_V();
+
+        // For identical sequences, optimal is U=V with no gaps
+        CHECK(u_seqA == "GCGC");
+        CHECK(u_seqB == "GCGC");
+        CHECK(v_seqA == "GCGC");
+        CHECK(v_seqB == "GCGC");
+
+        // U and V should be identical (no shifts)
+        CHECK(u_seqA == v_seqA);
+        CHECK(u_seqB == v_seqB);
     }
 
     SECTION("get_score() before align() returns initial value") {
@@ -270,5 +284,52 @@ TEST_CASE("ShiftAligner - Forward recursion with hand-calculated examples", "[sh
 
         // With high delta, algorithm should avoid shifts more aggressively
         // Scores might differ depending on whether shifts are used
+    }
+}
+
+TEST_CASE("ShiftAligner - Alignment output formatting", "[shift_aligner][output]") {
+    SECTION("format_alignment() produces valid output for identical sequences") {
+        ShiftAligner aligner("GCGC", "GCGC");
+        aligner.align();
+        aligner.traceback();
+
+        std::string formatted = aligner.format_alignment();
+
+        // Check that output contains expected sections
+        CHECK(formatted.find("Sequence Alignment (U):") != std::string::npos);
+        CHECK(formatted.find("Structure Alignment (V):") != std::string::npos);
+        CHECK(formatted.find("Shift Annotation:") != std::string::npos);
+
+        // Check that sequences appear in output
+        CHECK(formatted.find("GCGC") != std::string::npos);
+
+        // Check structure annotation (should be dots for unpaired)
+        CHECK(formatted.find("....") != std::string::npos);
+    }
+
+    SECTION("format_alignment() shows gaps correctly") {
+        ShiftAligner aligner("AA", "AAAA");
+        aligner.align();
+        aligner.traceback();
+
+        std::string formatted = aligner.format_alignment();
+
+        // Output should contain gaps (-)
+        CHECK(formatted.find("-") != std::string::npos);
+
+        // Should have valid structure with both dots and gap symbols
+        // (gaps in sequence mean gaps in structure too)
+    }
+
+    SECTION("format_alignment() returns non-empty string") {
+        ShiftAligner aligner("A", "A");
+        aligner.align();
+        aligner.traceback();
+
+        std::string formatted = aligner.format_alignment();
+
+        // Basic sanity check
+        CHECK(formatted.length() > 0);
+        CHECK(formatted.find("A") != std::string::npos);
     }
 }

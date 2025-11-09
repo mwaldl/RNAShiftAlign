@@ -1,5 +1,6 @@
 #include "shift_aligner.hh"
 
+#include <sstream>
 #include <LocARNA/rna_ensemble.hh>
 #include <LocARNA/pfold_params.hh>
 #include <LocARNA/anchor_constraints.hh>
@@ -150,8 +151,222 @@ ShiftAligner::align() {
 
 void
 ShiftAligner::traceback() {
-    // TODO: Implement traceback in future phase
-    // Will reconstruct U, V, W alignments from M matrix
+    // Reconstruct optimal bi-alignment from M matrix
+    // Start from endpoint and work backwards to (0,0,0,0)
+
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
+
+    // Clear any previous alignments
+    alignment_U_seqA_.clear();
+    alignment_U_seqB_.clear();
+    alignment_V_seqA_.clear();
+    alignment_V_seqB_.clear();
+
+    // Define column types (same as in fill_M_unpaired)
+    struct Column {
+        int c1, c2, c3, c4;
+    };
+
+    // Use same column ordering as forward pass to ensure consistency
+    // No-shift columns first, then shift columns
+    const std::vector<Column> valid_columns = {
+        // No-shift columns (3 total): c_U == c_V
+        {1,1,1,1},  // match-match
+        {1,0,1,0},  // del_A-del_A
+        {0,1,0,1},  // ins_A-ins_A
+
+        // Shift columns (12 total): c_U != c_V
+        {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,0},
+        {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
+    };
+
+    // Start from endpoint
+    size_type y1 = lenA;
+    size_type y2 = lenB;
+    size_type y3 = lenA;
+    size_type y4 = lenB;
+
+    // Traceback until we reach (0,0,0,0)
+    while (y1 > 0 || y2 > 0 || y3 > 0 || y4 > 0) {
+        score_t current_score = M_->get(y1, y2, y3, y4);
+
+        // Find which column type led to this cell
+        bool found = false;
+        for (const auto& col : valid_columns) {
+            // Compute predecessor
+            int x1 = y1 - col.c1;
+            int x2 = y2 - col.c2;
+            int x3 = y3 - col.c3;
+            int x4 = y4 - col.c4;
+
+            // Check validity
+            if (x1 < 0 || x2 < 0 || x3 < 0 || x4 < 0)
+                continue;
+
+            // Check δ_max constraint
+            if (std::abs(x1 - x3) > static_cast<int>(max_shifts_))
+                continue;
+            if (std::abs(x2 - x4) > static_cast<int>(max_shifts_))
+                continue;
+
+            // Get predecessor score
+            score_t pred_score = M_->get(x1, x2, x3, x4);
+
+            // Compute column score (same logic as forward)
+            score_t u_s(0);
+            ColumnType col_U;
+            if (col.c1 == 1 && col.c2 == 1) {
+                u_s = score_t(locarna_scoring_->basematch(y1, y2));
+                col_U = ColumnType::MATCH;
+            } else if (col.c1 == 1 && col.c2 == 0) {
+                u_s = score_t(locarna_scoring_->gapA(y1));
+                col_U = ColumnType::DEL_A;
+            } else if (col.c1 == 0 && col.c2 == 1) {
+                u_s = score_t(locarna_scoring_->gapB(y2));
+                col_U = ColumnType::INS_A;
+            } else {
+                col_U = ColumnType::MATCH;
+            }
+
+            score_t v_s(0);
+            ColumnType col_V;
+            if (col.c3 == 1 && col.c4 == 1) {
+                v_s = score_t(locarna_scoring_->basematch(y3, y4));
+                col_V = ColumnType::MATCH;
+            } else if (col.c3 == 1 && col.c4 == 0) {
+                v_s = score_t(locarna_scoring_->gapA(y3));
+                col_V = ColumnType::DEL_A;
+            } else if (col.c3 == 0 && col.c4 == 1) {
+                v_s = score_t(locarna_scoring_->gapB(y4));
+                col_V = ColumnType::INS_A;
+            } else {
+                col_V = ColumnType::MATCH;
+            }
+
+            score_t w_s = shift_scoring_.shift_penalty(col_U, col_V);
+            score_t column_score = u_s + v_s + w_s;
+
+            // Check if this is the path we took
+            if (pred_score + column_score == current_score) {
+                // Found the traceback step!
+                // Append to alignment strings (we're building backwards, so prepend)
+
+                // For U layer (sequence alignment)
+                // Note: LocARNA sequences are 1-indexed (position 0 contains a space)
+                if (col.c1 == 1) {
+                    alignment_U_seqA_ = seqA_->seqentry(0).seq()[y1] + alignment_U_seqA_;
+                } else {
+                    alignment_U_seqA_ = "-" + alignment_U_seqA_;
+                }
+
+                if (col.c2 == 1) {
+                    alignment_U_seqB_ = seqB_->seqentry(0).seq()[y2] + alignment_U_seqB_;
+                } else {
+                    alignment_U_seqB_ = "-" + alignment_U_seqB_;
+                }
+
+                // For V layer (structure alignment)
+                if (col.c3 == 1) {
+                    alignment_V_seqA_ = seqA_->seqentry(0).seq()[y3] + alignment_V_seqA_;
+                } else {
+                    alignment_V_seqA_ = "-" + alignment_V_seqA_;
+                }
+
+                if (col.c4 == 1) {
+                    alignment_V_seqB_ = seqB_->seqentry(0).seq()[y4] + alignment_V_seqB_;
+                } else {
+                    alignment_V_seqB_ = "-" + alignment_V_seqB_;
+                }
+
+                // Move to predecessor
+                y1 = x1;
+                y2 = x2;
+                y3 = x3;
+                y4 = x4;
+
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            throw std::runtime_error("Traceback failed: no valid predecessor found");
+        }
+    }
+}
+
+std::string
+ShiftAligner::format_alignment() const {
+    std::ostringstream oss;
+
+    // Helper to create structure annotation (currently all dots for unpaired)
+    auto make_structure = [](const std::string& seq) {
+        std::string structure;
+        for (char c : seq) {
+            structure += (c == '-') ? '-' : '.';
+        }
+        return structure;
+    };
+
+    // Helper to identify shift positions
+    auto find_shifts = [](const std::string& u_A, const std::string& u_B,
+                          const std::string& v_A, const std::string& v_B) {
+        std::string shifts;
+        size_t len = u_A.length();  // All should be same length
+        for (size_t i = 0; i < len; ++i) {
+            // Compare column patterns: (u_A[i], u_B[i]) vs (v_A[i], v_B[i])
+            bool u_both = (u_A[i] != '-' && u_B[i] != '-');
+            bool u_gap_A = (u_A[i] != '-' && u_B[i] == '-');
+            bool u_gap_B = (u_A[i] == '-' && u_B[i] != '-');
+            bool u_both_gap = (u_A[i] == '-' && u_B[i] == '-');
+
+            bool v_both = (v_A[i] != '-' && v_B[i] != '-');
+            bool v_gap_A = (v_A[i] != '-' && v_B[i] == '-');
+            bool v_gap_B = (v_A[i] == '-' && v_B[i] != '-');
+            bool v_both_gap = (v_A[i] == '-' && v_B[i] == '-');
+
+            // Shift occurs when gap patterns differ
+            bool is_shift = !(u_both == v_both && u_gap_A == v_gap_A &&
+                             u_gap_B == v_gap_B && u_both_gap == v_both_gap);
+
+            shifts += is_shift ? 'S' : '=';
+        }
+        return shifts;
+    };
+
+    // Create structure annotations
+    std::string strA_U = make_structure(alignment_U_seqA_);
+    std::string strB_U = make_structure(alignment_U_seqB_);
+    std::string strA_V = make_structure(alignment_V_seqA_);
+    std::string strB_V = make_structure(alignment_V_seqB_);
+
+    // Find shift positions
+    std::string shifts = find_shifts(alignment_U_seqA_, alignment_U_seqB_,
+                                     alignment_V_seqA_, alignment_V_seqB_);
+
+    // Format output
+    oss << "Sequence Alignment (U):\n";
+    oss << "strA: " << strA_U << "\n";
+    oss << "seqA: " << alignment_U_seqA_ << "\n";
+    oss << "seqB: " << alignment_U_seqB_ << "\n";
+    oss << "strB: " << strB_U << "\n";
+    oss << "\n";
+
+    oss << "Structure Alignment (V):\n";
+    oss << "seqA: " << alignment_V_seqA_ << "\n";
+    oss << "strA: " << strA_V << "\n";
+    oss << "strB: " << strB_V << "\n";
+    oss << "seqB: " << alignment_V_seqB_ << "\n";
+    oss << "\n";
+
+    oss << "Shift Annotation:\n";
+    oss << "      " << shifts << "\n";
+    oss << "      (= indicates U==V, S indicates shift)\n";
+
+    return oss.str();
 }
 
 void
@@ -170,10 +385,18 @@ ShiftAligner::fill_M_unpaired() {
     };
 
     // All 15 valid column types (excluding (0,0,0,0))
+    // Ordered to prefer no-shift columns (c1==c3 && c2==c4) first
+    // This ensures deterministic tie-breaking in favor of U==V
     const std::vector<Column> valid_columns = {
-        {1,1,1,1}, {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
-        {1,0,1,1}, {1,0,1,0}, {1,0,0,1}, {1,0,0,0},
-        {0,1,1,1}, {0,1,1,0}, {0,1,0,1}, {0,1,0,0},
+        // No-shift columns (3 total): c_U == c_V
+        {1,1,1,1},  // match-match
+        {1,0,1,0},  // del_A-del_A
+        {0,1,0,1},  // ins_A-ins_A
+
+        // Shift columns (12 total): c_U != c_V
+        {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,0},
         {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
     };
 

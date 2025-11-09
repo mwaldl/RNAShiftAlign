@@ -48,3 +48,4 @@ IMPLEMENTATION_PLAN.md
 # Local build scripts (personal, not for repo)
 build.sh
 BUILD_SETUP.md
+test_output.cc
