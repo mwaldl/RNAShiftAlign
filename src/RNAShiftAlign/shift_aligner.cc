@@ -1,5 +1,6 @@
 #include "shift_aligner.hh"
 
+#include <sstream>
 #include <LocARNA/rna_ensemble.hh>
 #include <LocARNA/pfold_params.hh>
 #include <LocARNA/anchor_constraints.hh>
@@ -167,10 +168,18 @@ ShiftAligner::traceback() {
         int c1, c2, c3, c4;
     };
 
+    // Use same column ordering as forward pass to ensure consistency
+    // No-shift columns first, then shift columns
     const std::vector<Column> valid_columns = {
-        {1,1,1,1}, {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
-        {1,0,1,1}, {1,0,1,0}, {1,0,0,1}, {1,0,0,0},
-        {0,1,1,1}, {0,1,1,0}, {0,1,0,1}, {0,1,0,0},
+        // No-shift columns (3 total): c_U == c_V
+        {1,1,1,1},  // match-match
+        {1,0,1,0},  // del_A-del_A
+        {0,1,0,1},  // ins_A-ins_A
+
+        // Shift columns (12 total): c_U != c_V
+        {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,0},
         {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
     };
 
@@ -289,6 +298,77 @@ ShiftAligner::traceback() {
     }
 }
 
+std::string
+ShiftAligner::format_alignment() const {
+    std::ostringstream oss;
+
+    // Helper to create structure annotation (currently all dots for unpaired)
+    auto make_structure = [](const std::string& seq) {
+        std::string structure;
+        for (char c : seq) {
+            structure += (c == '-') ? '-' : '.';
+        }
+        return structure;
+    };
+
+    // Helper to identify shift positions
+    auto find_shifts = [](const std::string& u_A, const std::string& u_B,
+                          const std::string& v_A, const std::string& v_B) {
+        std::string shifts;
+        size_t len = u_A.length();  // All should be same length
+        for (size_t i = 0; i < len; ++i) {
+            // Compare column patterns: (u_A[i], u_B[i]) vs (v_A[i], v_B[i])
+            bool u_both = (u_A[i] != '-' && u_B[i] != '-');
+            bool u_gap_A = (u_A[i] != '-' && u_B[i] == '-');
+            bool u_gap_B = (u_A[i] == '-' && u_B[i] != '-');
+            bool u_both_gap = (u_A[i] == '-' && u_B[i] == '-');
+
+            bool v_both = (v_A[i] != '-' && v_B[i] != '-');
+            bool v_gap_A = (v_A[i] != '-' && v_B[i] == '-');
+            bool v_gap_B = (v_A[i] == '-' && v_B[i] != '-');
+            bool v_both_gap = (v_A[i] == '-' && v_B[i] == '-');
+
+            // Shift occurs when gap patterns differ
+            bool is_shift = !(u_both == v_both && u_gap_A == v_gap_A &&
+                             u_gap_B == v_gap_B && u_both_gap == v_both_gap);
+
+            shifts += is_shift ? 'S' : '=';
+        }
+        return shifts;
+    };
+
+    // Create structure annotations
+    std::string strA_U = make_structure(alignment_U_seqA_);
+    std::string strB_U = make_structure(alignment_U_seqB_);
+    std::string strA_V = make_structure(alignment_V_seqA_);
+    std::string strB_V = make_structure(alignment_V_seqB_);
+
+    // Find shift positions
+    std::string shifts = find_shifts(alignment_U_seqA_, alignment_U_seqB_,
+                                     alignment_V_seqA_, alignment_V_seqB_);
+
+    // Format output
+    oss << "Sequence Alignment (U):\n";
+    oss << "strA: " << strA_U << "\n";
+    oss << "seqA: " << alignment_U_seqA_ << "\n";
+    oss << "seqB: " << alignment_U_seqB_ << "\n";
+    oss << "strB: " << strB_U << "\n";
+    oss << "\n";
+
+    oss << "Structure Alignment (V):\n";
+    oss << "seqA: " << alignment_V_seqA_ << "\n";
+    oss << "strA: " << strA_V << "\n";
+    oss << "strB: " << strB_V << "\n";
+    oss << "seqB: " << alignment_V_seqB_ << "\n";
+    oss << "\n";
+
+    oss << "Shift Annotation:\n";
+    oss << "      " << shifts << "\n";
+    oss << "      (= indicates U==V, S indicates shift)\n";
+
+    return oss.str();
+}
+
 void
 ShiftAligner::fill_M_unpaired() {
     // Implement Case 1 of Equation 17 (unpaired positions only)
@@ -305,10 +385,18 @@ ShiftAligner::fill_M_unpaired() {
     };
 
     // All 15 valid column types (excluding (0,0,0,0))
+    // Ordered to prefer no-shift columns (c1==c3 && c2==c4) first
+    // This ensures deterministic tie-breaking in favor of U==V
     const std::vector<Column> valid_columns = {
-        {1,1,1,1}, {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
-        {1,0,1,1}, {1,0,1,0}, {1,0,0,1}, {1,0,0,0},
-        {0,1,1,1}, {0,1,1,0}, {0,1,0,1}, {0,1,0,0},
+        // No-shift columns (3 total): c_U == c_V
+        {1,1,1,1},  // match-match
+        {1,0,1,0},  // del_A-del_A
+        {0,1,0,1},  // ins_A-ins_A
+
+        // Shift columns (12 total): c_U != c_V
+        {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,0},
         {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
     };
 

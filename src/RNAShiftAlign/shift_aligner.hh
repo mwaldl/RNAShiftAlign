@@ -55,11 +55,11 @@ struct ScoringParams {
     ScoringParams()
         : match(50),
           mismatch(0),
-          indel(-150),
+          indel(-100),
           indel_opening(-500),
           struct_weight(200),
           tau_factor(0),
-          delta(100),
+          delta(-150),
           max_shifts(5) {}
 };
 
@@ -179,6 +179,19 @@ public:
     std::pair<std::string, std::string> get_alignment_V() const {
         return {alignment_V_seqA_, alignment_V_seqB_};
     }
+
+    /**
+     * @brief Get formatted alignment string for visualization
+     *
+     * Returns human-readable alignment showing:
+     * - Sequence alignment (U) with sequence and structure for both RNAs
+     * - Structure alignment (V) with sequence and structure for both RNAs
+     * - Shift annotation showing where U ≠ V
+     *
+     * Only valid after traceback() has been called.
+     * @return Formatted multi-line string
+     */
+    std::string format_alignment() const;
 
 private:
     // Sequences
