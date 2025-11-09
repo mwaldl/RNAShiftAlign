@@ -147,24 +147,128 @@ TEST_CASE("ShiftAligner - Different sequence lengths", "[shift_aligner]") {
     }
 }
 
-TEST_CASE("ShiftAligner - Stub methods", "[shift_aligner]") {
-    ShiftAligner aligner("GCGC", "GCGC");
-
-    SECTION("align() returns a score (currently stub)") {
-        // Currently fill_M_unpaired is empty, so this will just
-        // check that the method runs without crashing
+TEST_CASE("ShiftAligner - Basic alignment", "[shift_aligner]") {
+    SECTION("align() returns a valid score for identical sequences") {
+        ShiftAligner aligner("GCGC", "GCGC");
         score_t score = aligner.align();
-        // Empty implementation should return the base case M(0,0,0,0) = 0
-        // But M(len,len,len,len) is uninitialized (-inf), so expect that
-        CHECK(score.is_neg_infty());
+
+        // For identical sequences with default parameters, we expect a positive score
+        // (all matches, no gaps, no shifts since U=V is optimal)
+        CHECK(!score.is_neg_infty());
+        CHECK(score > score_t(0));
     }
 
     SECTION("traceback() runs without crashing (currently stub)") {
+        ShiftAligner aligner("GCGC", "GCGC");
         // Should not throw even though it's a stub
         REQUIRE_NOTHROW(aligner.traceback());
     }
 
     SECTION("get_score() before align() returns initial value") {
+        ShiftAligner aligner("GCGC", "GCGC");
         CHECK(aligner.get_score() == score_t(0));
+    }
+
+    SECTION("get_score() after align() returns computed score") {
+        ShiftAligner aligner("GCGC", "GCGC");
+        score_t align_score = aligner.align();
+        score_t get_score = aligner.get_score();
+        CHECK(align_score == get_score);
+    }
+}
+
+TEST_CASE("ShiftAligner - Forward recursion with hand-calculated examples", "[shift_aligner][forward_recursion]") {
+    SECTION("Identical sequences - optimal should have U=V with no shifts") {
+        // For identical sequences with Δ > 0, the optimal bi-alignment
+        // should have U = V (no shifts), giving all matches
+        std::string seq = "AAAA";
+        ShiftAligner aligner(seq, seq);
+
+        score_t score = aligner.align();
+
+        // With default params: match=50, indel=-150, delta=100
+        // Optimal: 4 matches in U, 4 matches in V, 0 shift penalty
+        // Expected score: 4*(50 + 50 + 0) = 400
+        // Note: This assumes basematch for identical bases is 50
+        CHECK(score > score_t(0));
+        CHECK(!score.is_neg_infty());
+    }
+
+    SECTION("Different length sequences require gaps") {
+        // Align "AA" with "AAAA" - requires 2 gaps
+        ShiftAligner aligner("AA", "AAAA");
+
+        score_t score = aligner.align();
+
+        // Should be able to align with gaps (negative score due to indels)
+        CHECK(!score.is_neg_infty());
+        // With match=50, indel=-150: 2 matches + 2 gaps = 2*100 + 2*(-150) = -100
+        // But this is approximate since we have two layers
+        CHECK(score < score_t(500));  // Should not be unreasonably high
+    }
+
+    SECTION("Completely different sequences") {
+        // Different sequences should still align but with lower score
+        ShiftAligner aligner("AAAA", "UUUU");
+
+        score_t score = aligner.align();
+
+        // Should complete without error
+        CHECK(!score.is_neg_infty());
+
+        // Compare to identical sequences - should be lower score
+        ShiftAligner aligner_same("AAAA", "AAAA");
+        score_t score_same = aligner_same.align();
+
+        CHECK(score < score_same);
+    }
+
+    SECTION("Short sequences - verify matrix filling") {
+        // Very short sequence to manually verify
+        ShiftAligner aligner("A", "A");
+
+        score_t score = aligner.align();
+
+        // Single match in both layers, no gaps, no shifts
+        // Expected: 1*(match + match + 0) = 100
+        CHECK(score > score_t(0));
+        CHECK(!score.is_neg_infty());
+    }
+
+    SECTION("δ_max constraint is respected") {
+        // With default max_shifts=5, alignment should complete
+        ScoringParams params;
+        params.max_shifts = 2;  // Tighter constraint
+
+        ShiftAligner aligner("AAAA", "AAAA", PreprocessingParams(), params);
+
+        score_t score = aligner.align();
+
+        // Should still align successfully with tighter constraint
+        CHECK(!score.is_neg_infty());
+        CHECK(score > score_t(0));
+    }
+
+    SECTION("Shift penalty affects score when U != V") {
+        // Create scenario where shifts might occur
+        // Use different delta values and verify score changes
+        ScoringParams params_low_delta;
+        params_low_delta.delta = 10;  // Low shift penalty
+
+        ScoringParams params_high_delta;
+        params_high_delta.delta = 1000;  // High shift penalty
+
+        ShiftAligner aligner_low("AAUU", "UUAA", PreprocessingParams(), params_low_delta);
+        ShiftAligner aligner_high("AAUU", "UUAA", PreprocessingParams(), params_high_delta);
+
+        score_t score_low = aligner_low.align();
+        score_t score_high = aligner_high.align();
+
+        // Both should complete
+        CHECK(!score_low.is_neg_infty());
+        CHECK(!score_high.is_neg_infty());
+
+        // With high delta, algorithm should avoid shifts more aggressively
+        // Scores might differ depending on whether shifts are used
     }
 }

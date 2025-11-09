@@ -156,8 +156,134 @@ ShiftAligner::traceback() {
 
 void
 ShiftAligner::fill_M_unpaired() {
-    // TODO: Implement unpaired forward recursion in next phase
-    // This will fill M matrix according to Case 1 of Equation 17
+    // Implement Case 1 of Equation 17 (unpaired positions only)
+    // M(x, y) = max over c∈C { M(x, y-c) + s(y, c) }
+
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
+
+    // Define all 15 valid column types (c1, c2, c3, c4)
+    // where c_i ∈ {0, 1} and not all zeros
+    // 1 = consume position (•), 0 = gap (-)
+    struct Column {
+        int c1, c2, c3, c4;  // Column pattern
+    };
+
+    // All 15 valid column types (excluding (0,0,0,0))
+    const std::vector<Column> valid_columns = {
+        {1,1,1,1}, {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,1,0}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,1}, {0,1,0,0},
+        {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
+    };
+
+    // Fill M matrix in order of increasing positions
+    // y = (y1, y2, y3, y4) ranges from (0,0,0,0) to (lenA, lenB, lenA, lenB)
+    // We need to fill in an order that respects dependencies
+
+    for (size_type y1 = 0; y1 <= lenA; ++y1) {
+        for (size_type y2 = 0; y2 <= lenB; ++y2) {
+            for (size_type y3 = 0; y3 <= lenA; ++y3) {
+                // Check δ_max constraint: |y1 - y3| ≤ δ_max
+                if (std::abs(static_cast<int>(y1) - static_cast<int>(y3)) > static_cast<int>(max_shifts_))
+                    continue;
+
+                for (size_type y4 = 0; y4 <= lenB; ++y4) {
+                    // Check δ_max constraint: |y2 - y4| ≤ δ_max
+                    if (std::abs(static_cast<int>(y2) - static_cast<int>(y4)) > static_cast<int>(max_shifts_))
+                        continue;
+
+                    // Skip base case (already initialized)
+                    if (y1 == 0 && y2 == 0 && y3 == 0 && y4 == 0)
+                        continue;
+
+                    // Try all valid column types
+                    score_t best_score = score_t::neg_infty;
+
+                    for (const auto& col : valid_columns) {
+                        // Compute predecessor position x = y - c
+                        int x1 = y1 - col.c1;
+                        int x2 = y2 - col.c2;
+                        int x3 = y3 - col.c3;
+                        int x4 = y4 - col.c4;
+
+                        // Check if predecessor is valid
+                        if (x1 < 0 || x2 < 0 || x3 < 0 || x4 < 0)
+                            continue;
+
+                        // Check δ_max constraint at predecessor
+                        if (std::abs(x1 - x3) > static_cast<int>(max_shifts_))
+                            continue;
+                        if (std::abs(x2 - x4) > static_cast<int>(max_shifts_))
+                            continue;
+
+                        // Get score from predecessor
+                        score_t pred_score = M_->get(x1, x2, x3, x4);
+
+                        // Compute column score s(y, c) = u_s + v_s + w_s
+                        score_t column_score(0);
+
+                        // u_s: sequence alignment score for U layer (positions y1, y2)
+                        score_t u_s(0);
+                        ColumnType col_U;
+                        if (col.c1 == 1 && col.c2 == 1) {
+                            // Both sequences advance: match or mismatch
+                            u_s = score_t(locarna_scoring_->basematch(y1, y2));
+                            col_U = ColumnType::MATCH;
+                        } else if (col.c1 == 1 && col.c2 == 0) {
+                            // Gap in sequence B (deletion from A)
+                            u_s = score_t(locarna_scoring_->gapA(y1));
+                            col_U = ColumnType::DEL_A;
+                        } else if (col.c1 == 0 && col.c2 == 1) {
+                            // Gap in sequence A (insertion to B)
+                            u_s = score_t(locarna_scoring_->gapB(y2));
+                            col_U = ColumnType::INS_A;
+                        } else {
+                            // Both gaps in U: score 0, column type doesn't matter for shift scoring
+                            col_U = ColumnType::MATCH;  // Arbitrary choice for (0,0)
+                        }
+
+                        // v_s: structure score for V layer (positions y3, y4)
+                        score_t v_s(0);
+                        ColumnType col_V;
+                        if (col.c3 == 1 && col.c4 == 1) {
+                            // Both sequences advance: match or mismatch
+                            v_s = score_t(locarna_scoring_->basematch(y3, y4));
+                            col_V = ColumnType::MATCH;
+                        } else if (col.c3 == 1 && col.c4 == 0) {
+                            // Gap in sequence B
+                            v_s = score_t(locarna_scoring_->gapA(y3));
+                            col_V = ColumnType::DEL_A;
+                        } else if (col.c3 == 0 && col.c4 == 1) {
+                            // Gap in sequence A
+                            v_s = score_t(locarna_scoring_->gapB(y4));
+                            col_V = ColumnType::INS_A;
+                        } else {
+                            // Both gaps in V: score 0
+                            col_V = ColumnType::MATCH;  // Arbitrary choice for (0,0)
+                        }
+
+                        // w_s: shift penalty based on gap pattern mismatch
+                        // Compare column types c_U vs c_V
+                        score_t w_s = shift_scoring_.shift_penalty(col_U, col_V);
+
+                        column_score = u_s + v_s + w_s;
+
+                        // Compute total score for this choice
+                        score_t total_score = pred_score + column_score;
+
+                        // Update best score
+                        if (total_score > best_score) {
+                            best_score = total_score;
+                        }
+                    }
+
+                    // Store the best score
+                    M_->set(y1, y2, y3, y4, best_score);
+                }
+            }
+        }
+    }
 }
 
 } // namespace RNAShiftAlign
