@@ -10,6 +10,7 @@
 #include <LocARNA/arc_matches.hh>
 
 #include "shiftmatrix_m.hh"
+#include "shiftmatrix_d.hh"
 #include "shift_scoring.hh"
 
 namespace RNAShiftAlign {
@@ -211,7 +212,8 @@ private:
     size_type max_shifts_;  ///< Maximum allowed number of shifts (δ_max)
 
     // Dynamic programming matrices
-    std::unique_ptr<LocARNA::ShiftMatrixM<score_t>> M_;  ///< Main DP matrix
+    std::unique_ptr<LocARNA::ShiftMatrixM<score_t>> M_;  ///< Main DP matrix (4D)
+    std::unique_ptr<LocARNA::ShiftMatrixD<score_t>> D_;  ///< Structure DP matrix (6D)
 
     // Results
     score_t alignment_score_;  ///< Computed optimal score
@@ -229,6 +231,30 @@ private:
      * Future: Will be extended with Case 2 for structure.
      */
     void fill_M_unpaired();
+
+    /**
+     * @brief Fill D matrix for structure alignment
+     *
+     * Implements D matrix computation for all valid arc matches.
+     * For each base pair match (arc_a, arc_b), computes optimal
+     * alignment score inside the matched arcs with all shift combinations.
+     *
+     * Prerequisites: M matrix must be filled first (fill_M_unpaired).
+     */
+    void fill_D();
+
+    /**
+     * @brief Fill M matrix with structure case (Case 2)
+     *
+     * Extends M matrix filling to include Case 2 of Equation 17
+     * (paired positions). Uses D matrix values to handle base pair matches.
+     *
+     * This is the full algorithm combining both unpaired (Case 1) and
+     * paired (Case 2) recursions.
+     *
+     * Prerequisites: D matrix must be filled first (fill_D).
+     */
+    void fill_M_with_structure();
 };
 
 } // namespace RNAShiftAlign

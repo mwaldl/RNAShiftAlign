@@ -123,7 +123,8 @@ ShiftAligner::ShiftAligner(const std::string &seqA,
         locarna_scoring_params
     );
 
-    // Step 5: Allocate shift-aware DP matrix M(y1, y2, y3, y4)
+    // Step 5: Allocate shift-aware DP matrices
+    // M matrix: 4D matrix for sequence alignment M(y1, y2, y3, y4)
     M_ = std::make_unique<LocARNA::ShiftMatrixM<score_t>>(
         lenA + 1,
         lenB + 1,
@@ -134,6 +135,17 @@ ShiftAligner::ShiftAligner(const std::string &seqA,
     M_->fill(LocARNA::infty_score_t::neg_infty);
     // Base case: M(0, 0, 0, 0) = 0 (empty alignment)
     M_->set(0, 0, 0, 0, score_t(0));
+
+    // D matrix: 6D matrix for structure alignment D(arc_a, arc_b, x1, x2, y1, y2)
+    // Dimensions: number of base pairs in each RNA
+    size_type num_bps_A = arc_matches_->get_base_pairsA().num_bps();
+    size_type num_bps_B = arc_matches_->get_base_pairsB().num_bps();
+    D_ = std::make_unique<LocARNA::ShiftMatrixD<score_t>>(
+        num_bps_A,
+        num_bps_B,
+        max_shifts_
+    );
+    // Note: Individual 4D offset matrices are created on-demand in fill_D()
 }
 
 ShiftAligner::score_t
@@ -503,6 +515,106 @@ ShiftAligner::fill_M_unpaired() {
 
                     // Store the best score
                     M_->set(y1, y2, y3, y4, best_score);
+                }
+            }
+        }
+    }
+}
+
+void
+ShiftAligner::fill_D() {
+    // Implement D matrix computation for structure case
+    // For each valid arc match (arcA, arcB), store the optimal alignment
+    // score for positions INSIDE the matched arcs with all shift combinations
+    //
+    // Following LocARNA pattern (aligner.cc:575-610):
+    // D(arcA, arcB, shifts) = M(right_A-1, right_B-1, ...) + arcmatch_score
+    //
+    // For our shift case:
+    // D stores M values at positions just inside the arc right ends
+    // The arc match score will be added during Case 2 recursion
+
+    using Arc = LocARNA::BasePairs__Arc;
+
+    // Iterate over all valid arc matches
+    size_type num_arcs = arc_matches_->num_arc_matches();
+
+    for (size_type am_idx = 0; am_idx < num_arcs; ++am_idx) {
+        const auto& arc_match = arc_matches_->arcmatch(am_idx);
+        Arc arcA = arc_match.arcA();
+        Arc arcB = arc_match.arcB();
+
+        // Get arc endpoints (1-indexed positions in RNA)
+        size_type left_A = arcA.left();
+        size_type right_A = arcA.right();
+        size_type left_B = arcB.left();
+        size_type right_B = arcB.right();
+
+        // Get arc indices for D matrix
+        size_type idx_A = arcA.idx();
+        size_type idx_B = arcB.idx();
+
+        // Create 4D offset matrix for this arc pair
+        D_->create_offsetmatrix(idx_A, idx_B);
+
+        // Fill the offset matrix for all valid shift combinations
+        // D stores alignment scores for positions INSIDE the arcs
+        // Following LocARNA: M(ar-1, br-1) is position just inside arc
+        //
+        // For shift alignment, we have 4 dimensions of shifts:
+        // - shifts at left end: (shift_x1, shift_x2)
+        // - shifts at right end: (shift_y1, shift_y2)
+        //
+        // We want M at positions just inside the arc right ends WITH shifts
+
+        for (int shift_x1 = -static_cast<int>(max_shifts_);
+             shift_x1 <= static_cast<int>(max_shifts_); ++shift_x1) {
+            for (int shift_x2 = -static_cast<int>(max_shifts_);
+                 shift_x2 <= static_cast<int>(max_shifts_); ++shift_x2) {
+                for (int shift_y1 = -static_cast<int>(max_shifts_);
+                     shift_y1 <= static_cast<int>(max_shifts_); ++shift_y1) {
+                    for (int shift_y2 = -static_cast<int>(max_shifts_);
+                         shift_y2 <= static_cast<int>(max_shifts_); ++shift_y2) {
+
+                        // Position just inside arc right ends (following LocARNA)
+                        int m_y1 = static_cast<int>(right_A) - 1 + shift_y1;
+                        int m_y2 = static_cast<int>(right_B) - 1 + shift_y2;
+                        // For y3, y4 also use right end positions
+                        int m_y3 = static_cast<int>(right_A) - 1 + shift_y1;
+                        int m_y4 = static_cast<int>(right_B) - 1 + shift_y2;
+
+                        // Check bounds
+                        if (m_y1 < 0 || m_y2 < 0 || m_y3 < 0 || m_y4 < 0)
+                            continue;
+
+                        // Also check that positions are inside the arc
+                        // (must be after left end and before right end)
+                        if (m_y1 <= static_cast<int>(left_A) ||
+                            m_y3 <= static_cast<int>(left_A))
+                            continue;
+                        if (m_y2 <= static_cast<int>(left_B) ||
+                            m_y4 <= static_cast<int>(left_B))
+                            continue;
+                        if (m_y1 >= static_cast<int>(right_A) ||
+                            m_y3 >= static_cast<int>(right_A))
+                            continue;
+                        if (m_y2 >= static_cast<int>(right_B) ||
+                            m_y4 >= static_cast<int>(right_B))
+                            continue;
+
+                        // Get M matrix value at position just inside arc
+                        score_t m_score = M_->get(m_y1, m_y2, m_y3, m_y4);
+
+                        // Store in D matrix
+                        // NOTE: Arc-based indexing automatically handles shift offset
+                        // We pass absolute positions, D_->set() converts to shifts
+                        size_type x1 = left_A + shift_x1;
+                        size_type x2 = left_B + shift_x2;
+                        size_type y1 = right_A + shift_y1;
+                        size_type y2 = right_B + shift_y2;
+
+                        D_->set(arcA, arcB, x1, x2, y1, y2, m_score);
+                    }
                 }
             }
         }
