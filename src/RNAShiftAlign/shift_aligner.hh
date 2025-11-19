@@ -224,47 +224,140 @@ private:
     std::string alignment_V_seqA_;  ///< Sequence A in alignment V (with gaps)
     std::string alignment_V_seqB_;  ///< Sequence B in alignment V (with gaps)
 
-    /**
-     * @brief Fill D matrix for structure alignment
-     *
-     * Processes arc matches in descending order of left endpoints.
-     * For each arc match:
-     * 1. Fills LOCAL M-matrix for region inside the arc
-     * 2. Local M optimizes over both unpaired AND paired cases
-     * 3. Extracts D-value from local M-matrix
-     *
-     * Inner arcs are processed before outer arcs, enabling D-values
-     * for inner arcs to be used when filling outer arc regions.
-     */
-    void fill_D();
+    // ========== Core alignment functions (following LocARNA pattern) ==========
 
     /**
-     * @brief Fill M matrix with full Sankoff recursion
+     * @brief Initialize D matrix
      *
-     * Fills top-level M-matrix for entire sequence range.
-     * At each position, optimizes over:
-     * - Case 1: All unpaired column types
-     * - Case 2: All arc matches (using pre-computed D-values)
-     *
-     * Prerequisites: D matrix must be filled first (fill_D).
+     * Creates D matrix with proper dimensions based on arc matches
+     * and max_shifts parameter. Must be called before align_D().
      */
-    void fill_M_with_structure();
+    void init_D();
 
     /**
-     * @brief Fill local M-matrix for region inside an arc
+     * @brief Fill D matrix for all arc matches
      *
-     * Helper function used by fill_D().
-     * Fills M for positions in range [left_A+1..right_A-1] x [left_B+1..right_B-1].
-     * Optimizes over both unpaired columns and paired cases (using D-values
-     * for inner arcs already computed).
+     * Iterates over left arc endpoints (al, bl) in descending order.
+     * For each (al, bl) and each valid sequence offset (x1, x2):
+     * 1. Calls align_in_arcmatch to fill local M for the arc region
+     * 2. Calls fill_D_entries to extract D values
      *
-     * @param left_A  Left endpoint of arc in sequence A
-     * @param right_A Right endpoint of arc in sequence A
-     * @param left_B  Left endpoint of arc in sequence B
-     * @param right_B Right endpoint of arc in sequence B
+     * Inner arcs are processed before outer arcs.
      */
-    void fill_M_local(size_type left_A, size_type right_A,
-                      size_type left_B, size_type right_B);
+    void align_D();
+
+    /**
+     * @brief Fill M matrix for region inside an arc match
+     *
+     * Initializes M matrix for starting column (x1, x2, al, bl) and fills
+     * all entries for positions inside the arc region.
+     *
+     * @param al Left endpoint of arc in sequence A (structure layer)
+     * @param ar Right endpoint of arc in sequence A (structure layer)
+     * @param bl Left endpoint of arc in sequence B (structure layer)
+     * @param br Right endpoint of arc in sequence B (structure layer)
+     * @param x1 Sequence position at left end in A (can shift from al)
+     * @param x2 Sequence position at left end in B (can shift from bl)
+     * @param y1 Sequence position at right end in A (can shift from ar)
+     * @param y2 Sequence position at right end in B (can shift from br)
+     */
+    void align_in_arcmatch(size_type al, size_type ar,
+                           size_type bl, size_type br,
+                           size_type x1, size_type x2,
+                           size_type y1, size_type y2);
+
+    /**
+     * @brief Core recursion: compute M value at position
+     *
+     * Optimizes over:
+     * - Case 1: All 15 unpaired column types
+     * - Case 2: All arc matches with right ends at (y3, y4)
+     *
+     * @param al Left boundary of current arc region (structure A)
+     * @param bl Left boundary of current arc region (structure B)
+     * @param x1 Starting sequence position in A (at arc left)
+     * @param x2 Starting sequence position in B (at arc left)
+     * @param y1 Current sequence position in A (sequence layer)
+     * @param y2 Current sequence position in B (sequence layer)
+     * @param y3 Current structure position in A (structure layer)
+     * @param y4 Current structure position in B (structure layer)
+     * @return Optimal score for M(y1, y2, y3, y4)
+     */
+    score_t align_noex(size_type al, size_type bl,
+                       size_type x1, size_type x2,
+                       size_type y1, size_type y2,
+                       size_type y3, size_type y4);
+
+    /**
+     * @brief Extract D matrix entries for arc matches with left ends (al, bl)
+     *
+     * For each arc match with left ends at (al, bl) and each valid
+     * sequence offset combination:
+     * D(am, z1, z2, y1, y2) = M(y1, y2, ar-1, br-1) + arcmatch_score(am)
+     *
+     * @param al Left endpoint in sequence A (structure layer)
+     * @param bl Left endpoint in sequence B (structure layer)
+     * @param x1 Sequence position at left end in A
+     * @param x2 Sequence position at left end in B
+     */
+    void fill_D_entries(size_type al, size_type bl,
+                        size_type x1, size_type x2);
+
+    /**
+     * @brief Initialize M matrix boundaries for arc region
+     *
+     * Sets up M matrix entries at boundaries for region defined by
+     * structure positions (al, ar, bl, br) and sequence positions
+     * (x1, x2) to (y1, y2).
+     *
+     * @param al Left endpoint of arc in sequence A (structure layer)
+     * @param ar Right endpoint of arc in sequence A (structure layer)
+     * @param bl Left endpoint of arc in sequence B (structure layer)
+     * @param br Right endpoint of arc in sequence B (structure layer)
+     * @param x1 Sequence position at left end in A
+     * @param x2 Sequence position at left end in B
+     * @param y1 Sequence position at right end in A
+     * @param y2 Sequence position at right end in B
+     */
+    void init_M(size_type al, size_type ar,
+                size_type bl, size_type br,
+                size_type x1, size_type x2,
+                size_type y1, size_type y2);
+
+    /**
+     * @brief Check if shift between positions is valid
+     *
+     * @param seq_pos Sequence layer position
+     * @param struct_pos Structure layer position
+     * @return true if |seq_pos - struct_pos| <= max_shifts_
+     */
+    bool valid_shift(size_type seq_pos, size_type struct_pos) const {
+        return static_cast<int>(std::abs(static_cast<int>(seq_pos) -
+                                         static_cast<int>(struct_pos)))
+               <= static_cast<int>(max_shifts_);
+    }
+
+    // ========== Helper functions ==========
+
+    /**
+     * @brief Compute score for unpaired columns (Case 1)
+     *
+     * Iterates over all 15 valid column types and returns best score.
+     */
+    score_t compute_unpaired_score(size_type al, size_type bl,
+                                   size_type x1, size_type x2,
+                                   size_type y1, size_type y2,
+                                   size_type y3, size_type y4);
+
+    /**
+     * @brief Compute score for paired columns (Case 2)
+     *
+     * Iterates over all arc matches with right ends at (y3, y4).
+     */
+    score_t compute_paired_score(size_type al, size_type bl,
+                                 size_type x1, size_type x2,
+                                 size_type y1, size_type y2,
+                                 size_type y3, size_type y4);
 };
 
 } // namespace RNAShiftAlign
