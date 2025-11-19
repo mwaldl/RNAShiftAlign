@@ -762,4 +762,459 @@ ShiftAligner::fill_M_with_structure() {
     fill_M_local(0, lenA, 0, lenB);
 }
 
+// ============================================================================
+// NEW IMPLEMENTATION: LocARNA-style structure following program_flow_analysis.md
+// ============================================================================
+//
+// These functions implement the restructured algorithm that properly handles
+// shifts between sequence and structure layers. The key insight is that
+// arc endpoints have fixed structure positions (al, bl, ar, br) but the
+// corresponding sequence positions (x1, x2, y1, y2) can shift within δ_max.
+//
+// Program flow:
+// 1. init_D() - Create D matrix storage
+// 2. align_D() - Fill D matrix for all arc matches
+//    - For each (al, bl) in descending order:
+//      - For each valid (x1, x2) offset:
+//        - align_in_arcmatch() to fill local M
+//        - fill_D_entries() to extract D values
+// 3. align() calls align_in_arcmatch for top level (imagined surrounding arc)
+//
+// See planning_docs/program_flow_analysis.md for full details.
+// ============================================================================
+
+void
+ShiftAligner::init_D() {
+    // ------------------------------------------------------------
+    // Initialize D matrix storage
+    //
+    // D matrix is indexed by:
+    // - Arc match (arcA.idx(), arcB.idx())
+    // - Sequence positions at endpoints (z1, z2, y1, y2)
+    //
+    // The ShiftMatrixD class handles this 6D indexing.
+    //
+    // Implementation steps:
+    // 1. Get number of base pairs in each sequence
+    // 2. Create D matrix with (num_bps_A, num_bps_B, max_shifts)
+    // 3. For each arc match, create the offset matrix storage
+    //
+    // Note: D values are filled later by fill_D_entries()
+    // ------------------------------------------------------------
+
+    // TODO: Implement
+    // size_type num_bps_A = rna_dataA_->arc_probs_size(); // or similar
+    // size_type num_bps_B = rna_dataB_->arc_probs_size();
+    // D_ = std::make_unique<LocARNA::ShiftMatrixD<score_t>>(
+    //     num_bps_A, num_bps_B, max_shifts_);
+}
+
+void
+ShiftAligner::align_D() {
+    // ------------------------------------------------------------
+    // Fill D matrix for all arc matches
+    //
+    // Following LocARNA's align_D() pattern but with sequence offsets.
+    //
+    // Outer loop: iterate over structure positions (al, bl) in descending order
+    //   This ensures inner arcs are processed before outer arcs.
+    //
+    // Middle loop: iterate over valid sequence offsets (x1, x2)
+    //   x1 can range from al - max_shifts to al + max_shifts
+    //   x2 can range from bl - max_shifts to bl + max_shifts
+    //
+    // For each combination:
+    //   1. Find max right ends for arcs starting at (al, bl)
+    //   2. Compute corresponding y1, y2 sequence positions
+    //   3. Call align_in_arcmatch(al, ar, bl, br, x1, x2, y1, y2)
+    //   4. Call fill_D_entries(al, bl, x1, x2)
+    //
+    // Key difference from LocARNA:
+    // - We must iterate over x1, x2 offsets at each (al, bl)
+    // - The y1, y2 offsets are computed based on the arc lengths
+    //   and the starting offsets
+    //
+    // Implementation steps:
+    // 1. for al = lenA ... 1 (descending)
+    // 2.   for bl = lenB ... 1 (descending)
+    // 3.     Get arcmatches at (al, bl) using common_left_end_list
+    // 4.     If empty, continue
+    // 5.     Find max_ar, max_br for arcs starting here
+    // 6.     for shift_x1 = -max_shifts ... +max_shifts
+    // 7.       for shift_x2 = -max_shifts ... +max_shifts
+    // 8.         x1 = al + shift_x1, x2 = bl + shift_x2
+    // 9.         Check bounds
+    // 10.        Compute y1, y2 from ar, br and same relative shifts
+    // 11.        align_in_arcmatch(al, max_ar, bl, max_br, x1, x2, y1, y2)
+    // 12.        fill_D_entries(al, bl, x1, x2)
+    // ------------------------------------------------------------
+
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
+
+    // Iterate over left endpoints in descending order
+    for (size_type al = lenA; al > 0; --al) {
+        for (size_type bl = lenB; bl > 0; --bl) {
+
+            // Get arc matches with left ends at (al, bl)
+            const auto& arcmatches_at_left = arc_matches_->common_left_end_list(al, bl);
+            if (arcmatches_at_left.empty())
+                continue;
+
+            // Find maximal right ends
+            size_type max_ar = al;
+            size_type max_br = bl;
+            for (const auto& am_idx : arcmatches_at_left) {
+                const auto& am = arc_matches_->arcmatch(am_idx);
+                max_ar = std::max(max_ar, am.arcA().right());
+                max_br = std::max(max_br, am.arcB().right());
+            }
+
+            // Skip if no valid arcs
+            if (max_ar == al || max_br == bl)
+                continue;
+
+            // Iterate over sequence offsets at left end
+            for (int shift_x1 = -static_cast<int>(max_shifts_);
+                 shift_x1 <= static_cast<int>(max_shifts_); ++shift_x1) {
+                for (int shift_x2 = -static_cast<int>(max_shifts_);
+                     shift_x2 <= static_cast<int>(max_shifts_); ++shift_x2) {
+
+                    int x1 = static_cast<int>(al) + shift_x1;
+                    int x2 = static_cast<int>(bl) + shift_x2;
+
+                    // Bounds check for x1, x2
+                    if (x1 < 1 || x2 < 1)
+                        continue;
+                    if (x1 > static_cast<int>(lenA) || x2 > static_cast<int>(lenB))
+                        continue;
+
+                    // Compute y1, y2 using same relative shift
+                    // (This maintains the shift pattern through the arc)
+                    int y1 = static_cast<int>(max_ar) + shift_x1;
+                    int y2 = static_cast<int>(max_br) + shift_x2;
+
+                    // Bounds check for y1, y2
+                    if (y1 < 1 || y2 < 1)
+                        continue;
+                    if (y1 > static_cast<int>(lenA) || y2 > static_cast<int>(lenB))
+                        continue;
+
+                    // Fill M matrix for this arc region
+                    align_in_arcmatch(al, max_ar, bl, max_br,
+                                      static_cast<size_type>(x1),
+                                      static_cast<size_type>(x2),
+                                      static_cast<size_type>(y1),
+                                      static_cast<size_type>(y2));
+
+                    // Extract D entries
+                    fill_D_entries(al, bl,
+                                   static_cast<size_type>(x1),
+                                   static_cast<size_type>(x2));
+                }
+            }
+        }
+    }
+}
+
+void
+ShiftAligner::align_in_arcmatch(size_type al, size_type ar,
+                                 size_type bl, size_type br,
+                                 size_type x1, size_type x2,
+                                 size_type y1, size_type y2) {
+    // ------------------------------------------------------------
+    // Fill M matrix for region inside an arc match
+    //
+    // This corresponds to LocARNA's align_in_arcmatch but handles
+    // both sequence and structure positions.
+    //
+    // Parameters:
+    // - (al, ar, bl, br): Structure layer boundaries (fixed by arc)
+    // - (x1, x2): Sequence positions at left end (can shift from al, bl)
+    // - (y1, y2): Sequence positions at right end (can shift from ar, br)
+    //
+    // Steps:
+    // 1. Initialize M matrix boundaries: init_M(...)
+    // 2. For each structure position (y3, y4) in [al+1, ar-1] x [bl+1, br-1]:
+    //    For each valid sequence position (seq_y1, seq_y2):
+    //      M(seq_y1, seq_y2, y3, y4) = align_noex(...)
+    //
+    // The iteration order matters:
+    // - Structure positions y3, y4 go from al+1 to ar-1
+    // - Sequence positions must stay within shift of structure positions
+    //
+    // Key insight: At each structure position (y3, y4), we compute
+    // M values for all valid sequence positions around it.
+    // ------------------------------------------------------------
+
+    // Initialize boundaries
+    init_M(al, ar, bl, br, x1, x2, y1, y2);
+
+    // Fill M matrix for interior positions
+    for (size_type y3 = al + 1; y3 < ar; ++y3) {
+        for (size_type y4 = bl + 1; y4 < br; ++y4) {
+
+            // For each valid sequence position around (y3, y4)
+            for (int shift1 = -static_cast<int>(max_shifts_);
+                 shift1 <= static_cast<int>(max_shifts_); ++shift1) {
+                for (int shift2 = -static_cast<int>(max_shifts_);
+                     shift2 <= static_cast<int>(max_shifts_); ++shift2) {
+
+                    int seq_y1 = static_cast<int>(y3) + shift1;
+                    int seq_y2 = static_cast<int>(y4) + shift2;
+
+                    // Bounds check
+                    if (seq_y1 < static_cast<int>(x1) || seq_y1 > static_cast<int>(y1))
+                        continue;
+                    if (seq_y2 < static_cast<int>(x2) || seq_y2 > static_cast<int>(y2))
+                        continue;
+
+                    // Compute M value using core recursion
+                    score_t score = align_noex(al, bl, x1, x2,
+                                               static_cast<size_type>(seq_y1),
+                                               static_cast<size_type>(seq_y2),
+                                               y3, y4);
+
+                    M_->set(static_cast<size_type>(seq_y1),
+                            static_cast<size_type>(seq_y2),
+                            y3, y4, score);
+                }
+            }
+        }
+    }
+}
+
+ShiftAligner::score_t
+ShiftAligner::align_noex(size_type al, size_type bl,
+                          size_type x1, size_type x2,
+                          size_type y1, size_type y2,
+                          size_type y3, size_type y4) {
+    // ------------------------------------------------------------
+    // Core recursion: compute optimal M value at position
+    //
+    // This is the heart of the algorithm. It optimizes over:
+    // - Case 1: All 15 unpaired column types
+    // - Case 2: All arc matches with right ends at (y3, y4)
+    //
+    // Parameters:
+    // - (al, bl): Left boundaries of current arc region (structure)
+    // - (x1, x2): Starting sequence positions
+    // - (y1, y2): Current sequence position
+    // - (y3, y4): Current structure position
+    //
+    // Returns: Optimal score for M(y1, y2, y3, y4)
+    //
+    // Implementation:
+    // 1. Initialize max_score = -infinity
+    // 2. Case 1: max_score = max(max_score, compute_unpaired_score(...))
+    // 3. Case 2: max_score = max(max_score, compute_paired_score(...))
+    // 4. Return max_score
+    // ------------------------------------------------------------
+
+    score_t max_score = score_t::neg_infty;
+
+    // Case 1: Unpaired positions
+    max_score = std::max(max_score, compute_unpaired_score(al, bl, x1, x2, y1, y2, y3, y4));
+
+    // Case 2: Paired positions (arc matches)
+    max_score = std::max(max_score, compute_paired_score(al, bl, x1, x2, y1, y2, y3, y4));
+
+    return max_score;
+}
+
+void
+ShiftAligner::fill_D_entries(size_type al, size_type bl,
+                              size_type x1, size_type x2) {
+    // ------------------------------------------------------------
+    // Extract D matrix entries for arc matches with left ends (al, bl)
+    //
+    // For each arc match with left ends at (al, bl):
+    //   ar = arcA.right(), br = arcB.right()
+    //
+    //   For each valid (y1, y2) sequence position at right end:
+    //     D(am, x1, x2, y1, y2) = M(y1, y2, ar-1, br-1) + arcmatch_score(am)
+    //
+    // Note: x1, x2 are the sequence positions at the left end (passed in)
+    //       y1, y2 are iterated over based on ar, br and max_shifts
+    //
+    // Implementation:
+    // 1. Get arc matches at (al, bl) using common_left_end_list
+    // 2. For each arc match:
+    //    a. Get ar, br
+    //    b. Create offset matrix if needed: D_->create_offsetmatrix(...)
+    //    c. For each valid (y1, y2) within δ_max of (ar-1, br-1):
+    //       - Get M(y1, y2, ar-1, br-1)
+    //       - Compute D value = M + arcmatch_score
+    //       - Store: D_->set(arcA, arcB, x1, x2, y1, y2, D_value)
+    // ------------------------------------------------------------
+
+    const auto& arcmatches_at_left = arc_matches_->common_left_end_list(al, bl);
+
+    for (const auto& am_idx : arcmatches_at_left) {
+        const auto& am = arc_matches_->arcmatch(am_idx);
+        const auto& arcA = am.arcA();
+        const auto& arcB = am.arcB();
+
+        size_type ar = arcA.right();
+        size_type br = arcB.right();
+
+        // Create offset matrix for this arc pair if needed
+        D_->create_offsetmatrix(arcA.idx(), arcB.idx());
+
+        // Structure positions just inside arc right ends
+        size_type y3_fixed = ar - 1;
+        size_type y4_fixed = br - 1;
+
+        // Iterate over valid sequence positions at right end
+        for (int shift_y1 = -static_cast<int>(max_shifts_);
+             shift_y1 <= static_cast<int>(max_shifts_); ++shift_y1) {
+            for (int shift_y2 = -static_cast<int>(max_shifts_);
+                 shift_y2 <= static_cast<int>(max_shifts_); ++shift_y2) {
+
+                int y1 = static_cast<int>(y3_fixed) + shift_y1;
+                int y2 = static_cast<int>(y4_fixed) + shift_y2;
+
+                // Bounds check
+                if (y1 <= static_cast<int>(al) || y2 <= static_cast<int>(bl))
+                    continue;
+                if (y1 >= static_cast<int>(ar) || y2 >= static_cast<int>(br))
+                    continue;
+
+                // Get M value
+                score_t m_score = M_->get(static_cast<size_type>(y1),
+                                          static_cast<size_type>(y2),
+                                          y3_fixed, y4_fixed);
+
+                // Compute D value
+                score_t arc_score = score_t(locarna_scoring_->arcmatch(am));
+                score_t d_score = m_score + arc_score;
+
+                // Store in D matrix
+                D_->set(arcA, arcB, x1, x2,
+                        static_cast<size_type>(y1),
+                        static_cast<size_type>(y2),
+                        d_score);
+            }
+        }
+    }
+}
+
+void
+ShiftAligner::init_M(size_type al, size_type ar,
+                      size_type bl, size_type br,
+                      size_type x1, size_type x2,
+                      size_type y1, size_type y2) {
+    // ------------------------------------------------------------
+    // Initialize M matrix boundaries for arc region
+    //
+    // Sets up M matrix entries at the boundaries of the region.
+    // This corresponds to LocARNA's init_state function.
+    //
+    // Boundaries to initialize:
+    // - Left edge: y3 = al (structure A at left boundary)
+    // - Bottom edge: y4 = bl (structure B at left boundary)
+    //
+    // For each boundary position:
+    // - Compute gap costs from starting position (x1, x2, al, bl)
+    //
+    // Implementation:
+    // 1. M(x1, x2, al, bl) = 0 (or appropriate base case)
+    // 2. First row: M(seq_y1, x2, y3, bl) for y3 in [al+1, ar-1]
+    //    Gap cost in B for positions x2+1 to seq_y2
+    // 3. First column: M(x1, seq_y2, al, y4) for y4 in [bl+1, br-1]
+    //    Gap cost in A for positions x1+1 to seq_y1
+    //
+    // Note: Need to handle all valid sequence positions around each
+    // structure position.
+    //
+    // This is complex due to 4D nature. Key insight:
+    // - At boundary y3=al: structure A hasn't advanced, only gaps in A
+    // - At boundary y4=bl: structure B hasn't advanced, only gaps in B
+    // ------------------------------------------------------------
+
+    // TODO: Implement proper boundary initialization
+    // This requires careful handling of the 4D matrix structure
+    // and gap cost accumulation.
+
+    // Base case: starting position
+    M_->set(x1, x2, al, bl, score_t(0));
+
+    // Initialize first row (y4 = bl, varying y3 and y1)
+    // ... gap costs for insertions in B
+
+    // Initialize first column (y3 = al, varying y4 and y2)
+    // ... gap costs for deletions in A
+}
+
+ShiftAligner::score_t
+ShiftAligner::compute_unpaired_score(size_type al, size_type bl,
+                                      size_type x1, size_type x2,
+                                      size_type y1, size_type y2,
+                                      size_type y3, size_type y4) {
+    // ------------------------------------------------------------
+    // Compute best score for unpaired columns (Case 1)
+    //
+    // Iterates over all 15 valid column types and returns the best score.
+    // This is the existing Case 1 logic from fill_M_local.
+    //
+    // Column type (c1, c2, c3, c4):
+    // - c1, c2: sequence layer (0=gap, 1=content)
+    // - c3, c4: structure layer (0=gap, 1=content)
+    //
+    // For each column type:
+    // 1. Compute predecessor position (y1-c1, y2-c2, y3-c3, y4-c4)
+    // 2. Check bounds and δ_max constraints
+    // 3. Get predecessor M value
+    // 4. Compute column score: u_s + v_s + w_s
+    //    - u_s: sequence score (basematch or gap)
+    //    - v_s: structure score (basematch or gap)
+    //    - w_s: shift penalty
+    // 5. Update best score
+    //
+    // This should reuse the existing column type iteration logic
+    // from the current fill_M_local implementation.
+    // ------------------------------------------------------------
+
+    // TODO: Implement by extracting logic from fill_M_local
+    // Should iterate over all 15 column types and compute scores
+
+    return score_t::neg_infty;  // Placeholder
+}
+
+ShiftAligner::score_t
+ShiftAligner::compute_paired_score(size_type al, size_type bl,
+                                    size_type x1, size_type x2,
+                                    size_type y1, size_type y2,
+                                    size_type y3, size_type y4) {
+    // ------------------------------------------------------------
+    // Compute best score for paired columns (Case 2)
+    //
+    // Iterates over all arc matches with right ends at (y3, y4).
+    // Uses common_right_end_list to find these arc matches.
+    //
+    // For each arc match:
+    //   z3 = arcA.left(), z4 = arcB.left()
+    //
+    //   For each valid (z1, z2) within δ_max of (z3, z4):
+    //     For each gap pattern (c1_z, c2_z, 1, 1) for z-column:
+    //       For each gap pattern (c1_y, c2_y, 1, 1) for y-column:
+    //
+    //         Predecessor: M(z1-c1_z, z2-c2_z, z3-1, z4-1)
+    //         D value: D(am, z1, z2, y1, y2)
+    //         Column scores: z-column + y-column (sequence + structure + shift)
+    //
+    //         Score = predecessor + D + z_col_score + y_col_score
+    //
+    // This should reuse the existing Case 2 logic from fill_M_local.
+    //
+    // Note: Arc right ends must match (y3, y4), not (y1, y2)
+    // The sequence positions (y1, y2) can shift from structure positions.
+    // ------------------------------------------------------------
+
+    // TODO: Implement by extracting logic from fill_M_local
+    // Should use common_right_end_list(y3, y4)
+
+    return score_t::neg_infty;  // Placeholder
+}
+
 } // namespace RNAShiftAlign
