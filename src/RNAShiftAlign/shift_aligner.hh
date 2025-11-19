@@ -3,6 +3,7 @@
 
 #include <string>
 #include <memory>
+#include <iostream>
 
 #include <LocARNA/rna_data.hh>
 #include <LocARNA/scoring.hh>
@@ -194,6 +195,7 @@ public:
      */
     std::string format_alignment() const;
 
+ 
 private:
     // Sequences
     std::unique_ptr<LocARNA::Sequence> seqA_;
@@ -358,38 +360,6 @@ private:
                                  size_type x1, size_type x2,
                                  size_type y1, size_type y2,
                                  size_type y3, size_type y4);
-
-    // ========== Legacy functions (used by current align()) ==========
-
-    /**
-     * @brief Fill D matrix for all arc matches (legacy)
-     *
-     * Iterates over all arc matches and fills D matrix entries.
-     * Will be replaced by align_D() when restructuring is complete.
-     */
-    void fill_D();
-
-    /**
-     * @brief Fill M matrix for local region (legacy)
-     *
-     * Fills M matrix for region defined by arc boundaries.
-     * Will be replaced by align_in_arcmatch() when restructuring is complete.
-     *
-     * @param left_A Left boundary in sequence A
-     * @param right_A Right boundary in sequence A
-     * @param left_B Left boundary in sequence B
-     * @param right_B Right boundary in sequence B
-     */
-    void fill_M_local(size_type left_A, size_type right_A,
-                      size_type left_B, size_type right_B);
-
-    /**
-     * @brief Fill M matrix for entire sequences with structure (legacy)
-     *
-     * Top-level alignment call for the full sequence range.
-     * Will be replaced by align() calling align_in_arcmatch when restructuring is complete.
-     */
-    void fill_M_with_structure();
 };
 
 } // namespace RNAShiftAlign
