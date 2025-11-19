@@ -150,17 +150,25 @@ ShiftAligner::ShiftAligner(const std::string &seqA,
 
 ShiftAligner::score_t
 ShiftAligner::align() {
-    // Two-phase Sankoff algorithm:
+    // Two-phase Sankoff algorithm following LocARNA pattern:
     // 1. Fill D-matrix (processes arcs in descending order of left endpoints)
-    // 2. Fill top-level M-matrix using pre-computed D-values
+    // 2. Align top level with imagined surrounding arc (0, lenA+1, 0, lenB+1)
 
-    fill_D();
-    fill_M_with_structure();
-
-    // Optimal score is at M(len_A, len_B, len_A, len_B)
     size_type lenA = seqA_->length();
     size_type lenB = seqB_->length();
 
+    // Phase 1: Fill D matrix for all arc matches
+    align_D();
+
+    // Phase 2: Top-level alignment with imagined arc around entire sequences
+    // Structure boundaries: (0, lenA+1, 0, lenB+1) - virtual arc endpoints
+    // Sequence boundaries: (0, 0) to (lenA, lenB) - all positions used
+    align_in_arcmatch(0, lenA + 1, 0, lenB + 1,
+                      0, 0,           // x1, x2: sequence start
+                      lenA, lenB);    // y1, y2: sequence end
+
+    // Optimal score is at M(lenA, lenB, lenA, lenB)
+    // Both sequence and structure layers must consume all positions
     alignment_score_ = M_->get(lenA, lenB, lenA, lenB);
     return alignment_score_;
 }
