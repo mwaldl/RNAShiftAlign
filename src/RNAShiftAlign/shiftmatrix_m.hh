@@ -313,6 +313,50 @@ namespace LocARNA {
         transform(UnaryOperator f) {
             std::transform(mat_.begin(), mat_.end(), mat_.begin(), f);
         }
+
+        /**
+         * @brief Print matrix contents for debugging
+         *
+         * Outputs all entries in the M matrix including infinity values.
+         * This helps identify which entries were not filled during computation.
+         *
+         * @param os Output stream
+         * @param is_neg_infty Predicate to check if value is negative infinity
+         */
+        template <class Predicate>
+        void
+        debug_print(std::ostream& os, Predicate is_neg_infty) const {
+            os << "=== M Matrix (4D: y1, y2, y3, y4) ===\n";
+            os << "Dimensions: adim=" << adim_ << ", bdim=" << bdim_ << "\n";
+            os << "max_shifts=" << maxshift_ << "\n\n";
+
+            int count = 0;
+            int infty_count = 0;
+            for (size_type y1 = 0; y1 < adim_; ++y1) {
+                for (size_type y2 = 0; y2 < bdim_; ++y2) {
+                    for (size_type y3 = 0; y3 < adim_; ++y3) {
+                        for (size_type y4 = 0; y4 < bdim_; ++y4) {
+                            // Check delta_max constraint
+                            size_type shift_a = (y1 > y3) ? (y1 - y3) : (y3 - y1);
+                            size_type shift_b = (y2 > y4) ? (y2 - y4) : (y4 - y2);
+                            if (shift_a > maxshift_ || shift_b > maxshift_)
+                                continue;
+
+                            const elem_t& val = mat_[addr(y1, y2, y3, y4)];
+                            if (is_neg_infty(val)) {
+                                os << "M(" << y1 << "," << y2 << "," << y3 << "," << y4 << ") = -INF\n";
+                                ++infty_count;
+                            } else {
+                                os << "M(" << y1 << "," << y2 << "," << y3 << "," << y4 << ") = " << val << "\n";
+                            }
+                            ++count;
+                        }
+                    }
+                }
+            }
+
+            os << "\nTotal entries: " << count << " (finite: " << (count - infty_count) << ", -INF: " << infty_count << ")\n";
+        }
     };
 
 } // end namespace LocARNA
