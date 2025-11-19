@@ -225,36 +225,46 @@ private:
     std::string alignment_V_seqB_;  ///< Sequence B in alignment V (with gaps)
 
     /**
-     * @brief Fill M matrix for unpaired-only alignment
-     *
-     * Implements Case 1 of Equation 17 (no base pair matches).
-     * Future: Will be extended with Case 2 for structure.
-     */
-    void fill_M_unpaired();
-
-    /**
      * @brief Fill D matrix for structure alignment
      *
-     * Implements D matrix computation for all valid arc matches.
-     * For each base pair match (arc_a, arc_b), computes optimal
-     * alignment score inside the matched arcs with all shift combinations.
+     * Processes arc matches in descending order of left endpoints.
+     * For each arc match:
+     * 1. Fills LOCAL M-matrix for region inside the arc
+     * 2. Local M optimizes over both unpaired AND paired cases
+     * 3. Extracts D-value from local M-matrix
      *
-     * Prerequisites: M matrix must be filled first (fill_M_unpaired).
+     * Inner arcs are processed before outer arcs, enabling D-values
+     * for inner arcs to be used when filling outer arc regions.
      */
     void fill_D();
 
     /**
-     * @brief Fill M matrix with structure case (Case 2)
+     * @brief Fill M matrix with full Sankoff recursion
      *
-     * Extends M matrix filling to include Case 2 of Equation 17
-     * (paired positions). Uses D matrix values to handle base pair matches.
-     *
-     * This is the full algorithm combining both unpaired (Case 1) and
-     * paired (Case 2) recursions.
+     * Fills top-level M-matrix for entire sequence range.
+     * At each position, optimizes over:
+     * - Case 1: All unpaired column types
+     * - Case 2: All arc matches (using pre-computed D-values)
      *
      * Prerequisites: D matrix must be filled first (fill_D).
      */
     void fill_M_with_structure();
+
+    /**
+     * @brief Fill local M-matrix for region inside an arc
+     *
+     * Helper function used by fill_D().
+     * Fills M for positions in range [left_A+1..right_A-1] x [left_B+1..right_B-1].
+     * Optimizes over both unpaired columns and paired cases (using D-values
+     * for inner arcs already computed).
+     *
+     * @param left_A  Left endpoint of arc in sequence A
+     * @param right_A Right endpoint of arc in sequence A
+     * @param left_B  Left endpoint of arc in sequence B
+     * @param right_B Right endpoint of arc in sequence B
+     */
+    void fill_M_local(size_type left_A, size_type right_A,
+                      size_type left_B, size_type right_B);
 };
 
 } // namespace RNAShiftAlign

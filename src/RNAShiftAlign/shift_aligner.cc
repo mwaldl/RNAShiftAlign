@@ -150,8 +150,12 @@ ShiftAligner::ShiftAligner(const std::string &seqA,
 
 ShiftAligner::score_t
 ShiftAligner::align() {
-    // Fill M matrix for unpaired-only alignment
-    fill_M_unpaired();
+    // Two-phase Sankoff algorithm:
+    // 1. Fill D-matrix (processes arcs in descending order of left endpoints)
+    // 2. Fill top-level M-matrix using pre-computed D-values
+
+    fill_D();
+    fill_M_with_structure();
 
     // Optimal score is at M(len_A, len_B, len_A, len_B)
     size_type lenA = seqA_->length();
@@ -382,12 +386,11 @@ ShiftAligner::format_alignment() const {
 }
 
 void
-ShiftAligner::fill_M_unpaired() {
-    // Implement Case 1 of Equation 17 (unpaired positions only)
-    // M(x, y) = max over c∈C { M(x, y-c) + s(y, c) }
-
-    size_type lenA = seqA_->length();
-    size_type lenB = seqB_->length();
+ShiftAligner::fill_M_local(size_type left_A, size_type right_A,
+                            size_type left_B, size_type right_B) {
+    // Fill M-matrix for region [left_A..right_A] x [left_B..right_B]
+    // Used when computing D-values for arc matches
+    // Optimizes over BOTH unpaired columns AND paired cases (using D-values for inner arcs)
 
     // Define all 15 valid column types (c1, c2, c3, c4)
     // where c_i ∈ {0, 1} and not all zeros
@@ -412,24 +415,23 @@ ShiftAligner::fill_M_unpaired() {
         {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
     };
 
-    // Fill M matrix in order of increasing positions
-    // y = (y1, y2, y3, y4) ranges from (0,0,0,0) to (lenA, lenB, lenA, lenB)
-    // We need to fill in an order that respects dependencies
+    // Fill M matrix for local region
+    // Respects dependencies: fill in order of increasing positions
 
-    for (size_type y1 = 0; y1 <= lenA; ++y1) {
-        for (size_type y2 = 0; y2 <= lenB; ++y2) {
-            for (size_type y3 = 0; y3 <= lenA; ++y3) {
-                // Check δ_max constraint: |y1 - y3| ≤ δ_max
+    for (size_type y1 = left_A; y1 <= right_A; ++y1) {
+        for (size_type y2 = left_B; y2 <= right_B; ++y2) {
+            for (size_type y3 = left_A; y3 <= right_A; ++y3) {
+                // Check δ_max constraint
                 if (std::abs(static_cast<int>(y1) - static_cast<int>(y3)) > static_cast<int>(max_shifts_))
                     continue;
 
-                for (size_type y4 = 0; y4 <= lenB; ++y4) {
-                    // Check δ_max constraint: |y2 - y4| ≤ δ_max
+                for (size_type y4 = left_B; y4 <= right_B; ++y4) {
+                    // Check δ_max constraint
                     if (std::abs(static_cast<int>(y2) - static_cast<int>(y4)) > static_cast<int>(max_shifts_))
                         continue;
 
-                    // Skip base case (already initialized)
-                    if (y1 == 0 && y2 == 0 && y3 == 0 && y4 == 0)
+                    // Skip base case
+                    if (y1 == left_A && y2 == left_B && y3 == left_A && y4 == left_B)
                         continue;
 
                     // Try all valid column types
@@ -442,8 +444,9 @@ ShiftAligner::fill_M_unpaired() {
                         int x3 = y3 - col.c3;
                         int x4 = y4 - col.c4;
 
-                        // Check if predecessor is valid
-                        if (x1 < 0 || x2 < 0 || x3 < 0 || x4 < 0)
+                        // Check if predecessor is within local region
+                        if (x1 < static_cast<int>(left_A) || x2 < static_cast<int>(left_B) ||
+                            x3 < static_cast<int>(left_A) || x4 < static_cast<int>(left_B))
                             continue;
 
                         // Check δ_max constraint at predecessor
@@ -513,6 +516,147 @@ ShiftAligner::fill_M_unpaired() {
                         }
                     }
 
+                    // ========== CASE 2: Paired positions ==========
+                    // Paired columns: structure layer (y3, y4) must match arc right ends
+                    // Valid gap patterns: (1,1,1,1), (1,0,1,1), (0,1,1,1), (0,0,1,1)
+                    // Structure layer cannot have gaps when base pairs are matched
+
+                    // Get all arc matches with right ends at current structure positions (y3, y4)
+                    const auto& arcmatches_at_right = arc_matches_->common_right_end_list(y3, y4);
+
+                    for (const auto& am_idx : arcmatches_at_right) {
+                        const auto& arc_match = arc_matches_->arcmatch(am_idx);
+                        const auto& arcA = arc_match.arcA();
+                        const auto& arcB = arc_match.arcB();
+
+                        size_type z3 = arcA.left();   // Left arc endpoint in structure A
+                        size_type z4 = arcB.left();   // Left arc endpoint in structure B
+
+                        // Arc must be inside current region
+                        if (z3 <= left_A || z4 <= left_B)
+                            continue;
+
+                        // Iterate over all possible sequence positions z1, z2 at arc left ends
+                        // z1, z2 can shift from z3, z4 within δ_max constraint
+                        for (int shift_z1 = -static_cast<int>(max_shifts_);
+                             shift_z1 <= static_cast<int>(max_shifts_); ++shift_z1) {
+                            for (int shift_z2 = -static_cast<int>(max_shifts_);
+                                 shift_z2 <= static_cast<int>(max_shifts_); ++shift_z2) {
+
+                                int z1 = static_cast<int>(z3) + shift_z1;
+                                int z2 = static_cast<int>(z4) + shift_z2;
+
+                                // Check bounds for z positions
+                                if (z1 < static_cast<int>(left_A) || z2 < static_cast<int>(left_B))
+                                    continue;
+
+                                // Iterate over valid gap patterns for z-column (arc left ends)
+                                // Gap patterns: (c1_z, c2_z, 1, 1) where c1_z, c2_z ∈ {0, 1}
+                                for (int c1_z = 0; c1_z <= 1; ++c1_z) {
+                                    for (int c2_z = 0; c2_z <= 1; ++c2_z) {
+
+                                        // Iterate over valid gap patterns for y-column (arc right ends)
+                                        // Gap patterns: (c1_y, c2_y, 1, 1) where c1_y, c2_y ∈ {0, 1}
+                                        for (int c1_y = 0; c1_y <= 1; ++c1_y) {
+                                            for (int c2_y = 0; c2_y <= 1; ++c2_y) {
+
+                                                // M score before arc left endpoints: M(z1-c1_z, z2-c2_z, z3-1, z4-1)
+                                                int x1 = z1 - c1_z;
+                                                int x2 = z2 - c2_z;
+                                                int x3 = static_cast<int>(z3) - 1;
+                                                int x4 = static_cast<int>(z4) - 1;
+
+                                                // Check bounds for x positions
+                                                if (x1 < static_cast<int>(left_A) || x2 < static_cast<int>(left_B) ||
+                                                    x3 < static_cast<int>(left_A) || x4 < static_cast<int>(left_B))
+                                                    continue;
+
+                                                // Check δ_max constraint at x positions
+                                                if (std::abs(x1 - x3) > static_cast<int>(max_shifts_))
+                                                    continue;
+                                                if (std::abs(x2 - x4) > static_cast<int>(max_shifts_))
+                                                    continue;
+
+                                                // Get M score before the arc
+                                                score_t m_before = M_->get(x1, x2, x3, x4);
+
+                                                // D score: optimal alignment inside matched arcs
+                                                // D indexed by sequence positions at arc endpoints (z1, z2, y1, y2)
+                                                score_t d_score = D_->get(arcA, arcB, z1, z2, y1, y2);
+
+                                                // Arc match score from LocARNA (includes structure scoring)
+                                                score_t arc_score = score_t(locarna_scoring_->arcmatch(arc_match));
+
+                                                // Score for the two paired columns (z and y)
+                                                score_t z_col_score(0);
+                                                score_t y_col_score(0);
+
+                                                // z-column scoring (sequence layer)
+                                                ColumnType col_U_z, col_V_z;
+                                                score_t u_s_z(0), v_s_z(0);
+
+                                                if (c1_z == 1 && c2_z == 1) {
+                                                    u_s_z = score_t(locarna_scoring_->basematch(z1, z2));
+                                                    col_U_z = ColumnType::MATCH;
+                                                } else if (c1_z == 1 && c2_z == 0) {
+                                                    u_s_z = score_t(locarna_scoring_->gapA(z1));
+                                                    col_U_z = ColumnType::DEL_A;
+                                                } else if (c1_z == 0 && c2_z == 1) {
+                                                    u_s_z = score_t(locarna_scoring_->gapB(z2));
+                                                    col_U_z = ColumnType::INS_A;
+                                                } else {
+                                                    // (0,0) - gap-on-gap scores 0
+                                                    col_U_z = ColumnType::MATCH;  // Arbitrary for (0,0)
+                                                }
+
+                                                // Structure layer always has content in Case 2
+                                                v_s_z = score_t(locarna_scoring_->basematch(z3, z4));
+                                                col_V_z = ColumnType::MATCH;
+
+                                                score_t w_s_z = shift_scoring_.shift_penalty(col_U_z, col_V_z);
+                                                z_col_score = u_s_z + v_s_z + w_s_z;
+
+                                                // y-column scoring (sequence layer)
+                                                ColumnType col_U_y, col_V_y;
+                                                score_t u_s_y(0), v_s_y(0);
+
+                                                if (c1_y == 1 && c2_y == 1) {
+                                                    u_s_y = score_t(locarna_scoring_->basematch(y1, y2));
+                                                    col_U_y = ColumnType::MATCH;
+                                                } else if (c1_y == 1 && c2_y == 0) {
+                                                    u_s_y = score_t(locarna_scoring_->gapA(y1));
+                                                    col_U_y = ColumnType::DEL_A;
+                                                } else if (c1_y == 0 && c2_y == 1) {
+                                                    u_s_y = score_t(locarna_scoring_->gapB(y2));
+                                                    col_U_y = ColumnType::INS_A;
+                                                } else {
+                                                    // (0,0) - gap-on-gap scores 0
+                                                    col_U_y = ColumnType::MATCH;  // Arbitrary for (0,0)
+                                                }
+
+                                                // Structure layer always has content in Case 2
+                                                v_s_y = score_t(locarna_scoring_->basematch(y3, y4));
+                                                col_V_y = ColumnType::MATCH;
+
+                                                score_t w_s_y = shift_scoring_.shift_penalty(col_U_y, col_V_y);
+                                                y_col_score = u_s_y + v_s_y + w_s_y;
+
+                                                score_t paired_col_score = z_col_score + y_col_score;
+
+                                                // Total score: M(before) + D(inside) + arc_score + column_scores
+                                                score_t total_score = m_before + d_score + arc_score + paired_col_score;
+
+                                                if (total_score > best_score) {
+                                                    best_score = total_score;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Store the best score
                     M_->set(y1, y2, y3, y4, best_score);
                 }
@@ -523,102 +667,99 @@ ShiftAligner::fill_M_unpaired() {
 
 void
 ShiftAligner::fill_D() {
-    // Implement D matrix computation for structure case
-    // For each valid arc match (arcA, arcB), store the optimal alignment
-    // score for positions INSIDE the matched arcs with all shift combinations
-    //
-    // Following LocARNA pattern (aligner.cc:575-610):
-    // D(arcA, arcB, shifts) = M(right_A-1, right_B-1, ...) + arcmatch_score
-    //
-    // For our shift case:
-    // D stores M values at positions just inside the arc right ends
-    // The arc match score will be added during Case 2 recursion
+    // Implement D matrix computation following LocARNA pattern
+    // Process arc matches in descending order of left endpoints
+    // For each arc: fill local M, extract D values
 
     using Arc = LocARNA::BasePairs__Arc;
 
-    // Iterate over all valid arc matches
-    size_type num_arcs = arc_matches_->num_arc_matches();
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
 
-    for (size_type am_idx = 0; am_idx < num_arcs; ++am_idx) {
-        const auto& arc_match = arc_matches_->arcmatch(am_idx);
-        Arc arcA = arc_match.arcA();
-        Arc arcB = arc_match.arcB();
+    // Traverse left ends in descending order (inner arcs before outer arcs)
+    for (size_type al = lenA; al > 0; --al) {
+        for (size_type bl = lenB; bl > 0; --bl) {
 
-        // Get arc endpoints (1-indexed positions in RNA)
-        size_type left_A = arcA.left();
-        size_type right_A = arcA.right();
-        size_type left_B = arcB.left();
-        size_type right_B = arcB.right();
+            // Get all arc matches with left ends at (al, bl)
+            const auto& arcmatches_at_left = arc_matches_->common_left_end_list(al, bl);
+            if (arcmatches_at_left.empty())
+                continue;
 
-        // Get arc indices for D matrix
-        size_type idx_A = arcA.idx();
-        size_type idx_B = arcB.idx();
+            // Find maximal right ends for arcs starting at (al, bl)
+            size_type max_ar = al;
+            size_type max_br = bl;
 
-        // Create 4D offset matrix for this arc pair
-        D_->create_offsetmatrix(idx_A, idx_B);
+            for (const auto& am_idx : arcmatches_at_left) {
+                const auto& am = arc_matches_->arcmatch(am_idx);
+                max_ar = std::max(max_ar, am.arcA().right());
+                max_br = std::max(max_br, am.arcB().right());
+            }
 
-        // Fill the offset matrix for all valid shift combinations
-        // D stores alignment scores for positions INSIDE the arcs
-        // Following LocARNA: M(ar-1, br-1) is position just inside arc
-        //
-        // For shift alignment, we have 4 dimensions of shifts:
-        // - shifts at left end: (shift_x1, shift_x2)
-        // - shifts at right end: (shift_y1, shift_y2)
-        //
-        // We want M at positions just inside the arc right ends WITH shifts
+            // Skip if no valid arcs
+            if (max_ar == al || max_br == bl)
+                continue;
 
-        for (int shift_x1 = -static_cast<int>(max_shifts_);
-             shift_x1 <= static_cast<int>(max_shifts_); ++shift_x1) {
-            for (int shift_x2 = -static_cast<int>(max_shifts_);
-                 shift_x2 <= static_cast<int>(max_shifts_); ++shift_x2) {
+            // Fill LOCAL M-matrix for region inside the arc
+            // This reuses M_ memory and can use D-values for inner arcs
+            fill_M_local(al, max_ar, bl, max_br);
+
+            // Extract D values for all arc matches with left ends at (al, bl)
+            for (const auto& am_idx : arcmatches_at_left) {
+                const auto& arc_match = arc_matches_->arcmatch(am_idx);
+                const Arc& arcA = arc_match.arcA();
+                const Arc& arcB = arc_match.arcB();
+
+                size_type right_A = arcA.right();
+                size_type right_B = arcB.right();
+
+                // Create offset matrix for this arc pair
+                D_->create_offsetmatrix(arcA.idx(), arcB.idx());
+
+                // Extract D values: M at positions just inside arc right ends
+                // Structure positions are fixed at (right_A-1, right_B-1)
+                // Sequence positions (y1, y2) can vary within δ_max
+                size_type y3_fixed = right_A - 1;
+                size_type y4_fixed = right_B - 1;
+
                 for (int shift_y1 = -static_cast<int>(max_shifts_);
                      shift_y1 <= static_cast<int>(max_shifts_); ++shift_y1) {
                     for (int shift_y2 = -static_cast<int>(max_shifts_);
                          shift_y2 <= static_cast<int>(max_shifts_); ++shift_y2) {
 
-                        // Position just inside arc right ends (following LocARNA)
-                        int m_y1 = static_cast<int>(right_A) - 1 + shift_y1;
-                        int m_y2 = static_cast<int>(right_B) - 1 + shift_y2;
-                        // For y3, y4 also use right end positions
-                        int m_y3 = static_cast<int>(right_A) - 1 + shift_y1;
-                        int m_y4 = static_cast<int>(right_B) - 1 + shift_y2;
+                        // Sequence positions can shift from structure positions
+                        int y1 = static_cast<int>(y3_fixed) + shift_y1;
+                        int y2 = static_cast<int>(y4_fixed) + shift_y2;
 
-                        // Check bounds
-                        if (m_y1 < 0 || m_y2 < 0 || m_y3 < 0 || m_y4 < 0)
+                        // Bounds checking
+                        if (y1 <= static_cast<int>(al) || y2 <= static_cast<int>(bl))
+                            continue;
+                        if (y1 >= static_cast<int>(right_A) || y2 >= static_cast<int>(right_B))
                             continue;
 
-                        // Also check that positions are inside the arc
-                        // (must be after left end and before right end)
-                        if (m_y1 <= static_cast<int>(left_A) ||
-                            m_y3 <= static_cast<int>(left_A))
-                            continue;
-                        if (m_y2 <= static_cast<int>(left_B) ||
-                            m_y4 <= static_cast<int>(left_B))
-                            continue;
-                        if (m_y1 >= static_cast<int>(right_A) ||
-                            m_y3 >= static_cast<int>(right_A))
-                            continue;
-                        if (m_y2 >= static_cast<int>(right_B) ||
-                            m_y4 >= static_cast<int>(right_B))
-                            continue;
+                        // Get M value from local M-matrix just filled
+                        // M(y1, y2, y3_fixed, y4_fixed) = best alignment up to this point
+                        score_t m_score = M_->get(y1, y2, y3_fixed, y4_fixed);
 
-                        // Get M matrix value at position just inside arc
-                        score_t m_score = M_->get(m_y1, m_y2, m_y3, m_y4);
-
-                        // Store in D matrix
-                        // NOTE: Arc-based indexing automatically handles shift offset
-                        // We pass absolute positions, D_->set() converts to shifts
-                        size_type x1 = left_A + shift_x1;
-                        size_type x2 = left_B + shift_x2;
-                        size_type y1 = right_A + shift_y1;
-                        size_type y2 = right_B + shift_y2;
-
-                        D_->set(arcA, arcB, x1, x2, y1, y2, m_score);
+                        // Store in D matrix indexed by sequence positions at arc endpoints
+                        // D(arcA, arcB, al, bl, y1, y2)
+                        D_->set(arcA, arcB, al, bl, y1, y2, m_score);
                     }
                 }
             }
         }
     }
+}
+
+void
+ShiftAligner::fill_M_with_structure() {
+    // Fill top-level M-matrix for entire sequence range
+    // Same recursion as fill_M_local, but for range [0..lenA] x [0..lenB]
+
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
+
+    // Simply call fill_M_local with full sequence range
+    fill_M_local(0, lenA, 0, lenB);
 }
 
 } // namespace RNAShiftAlign
