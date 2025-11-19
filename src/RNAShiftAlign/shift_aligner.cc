@@ -788,25 +788,18 @@ ShiftAligner::init_D() {
     // ------------------------------------------------------------
     // Initialize D matrix storage
     //
-    // D matrix is indexed by:
-    // - Arc match (arcA.idx(), arcB.idx())
-    // - Sequence positions at endpoints (z1, z2, y1, y2)
+    // D matrix allocation is done in the constructor:
+    // - D_ is created with dimensions (num_bps_A, num_bps_B, max_shifts_)
     //
-    // The ShiftMatrixD class handles this 6D indexing.
+    // This function can be used to initialize D matrix values if needed.
+    // Currently, D values are filled on-demand by fill_D_entries().
     //
-    // Implementation steps:
-    // 1. Get number of base pairs in each sequence
-    // 2. Create D matrix with (num_bps_A, num_bps_B, max_shifts)
-    // 3. For each arc match, create the offset matrix storage
-    //
-    // Note: D values are filled later by fill_D_entries()
+    // The offset matrices for each arc pair are created when needed
+    // via D_->create_offsetmatrix().
     // ------------------------------------------------------------
 
-    // TODO: Implement
-    // size_type num_bps_A = rna_dataA_->arc_probs_size(); // or similar
-    // size_type num_bps_B = rna_dataB_->arc_probs_size();
-    // D_ = std::make_unique<LocARNA::ShiftMatrixD<score_t>>(
-    //     num_bps_A, num_bps_B, max_shifts_);
+    // D matrix is already allocated in constructor
+    // Individual offset matrices are created on-demand in fill_D_entries()
 }
 
 void
@@ -874,7 +867,7 @@ ShiftAligner::align_D() {
             if (max_ar == al || max_br == bl)
                 continue;
 
-            // Iterate over sequence offsets at left end
+            // Iterate over sequence offsets at left end (x1, x2)
             for (int shift_x1 = -static_cast<int>(max_shifts_);
                  shift_x1 <= static_cast<int>(max_shifts_); ++shift_x1) {
                 for (int shift_x2 = -static_cast<int>(max_shifts_);
@@ -889,25 +882,18 @@ ShiftAligner::align_D() {
                     if (x1 > static_cast<int>(lenA) || x2 > static_cast<int>(lenB))
                         continue;
 
-                    // Compute y1, y2 using same relative shift
-                    // (This maintains the shift pattern through the arc)
-                    int y1 = static_cast<int>(max_ar) + shift_x1;
-                    int y2 = static_cast<int>(max_br) + shift_x2;
+                    // Compute maximum y1, y2 (right end sequence positions)
+                    // Fill M up to max possible shift from structure right ends
+                    size_type max_y1 = std::min(max_ar + max_shifts_, lenA);
+                    size_type max_y2 = std::min(max_br + max_shifts_, lenB);
 
-                    // Bounds check for y1, y2
-                    if (y1 < 1 || y2 < 1)
-                        continue;
-                    if (y1 > static_cast<int>(lenA) || y2 > static_cast<int>(lenB))
-                        continue;
-
-                    // Fill M matrix for this arc region
+                    // Fill M matrix for this arc region with all possible right ends
                     align_in_arcmatch(al, max_ar, bl, max_br,
                                       static_cast<size_type>(x1),
                                       static_cast<size_type>(x2),
-                                      static_cast<size_type>(y1),
-                                      static_cast<size_type>(y2));
+                                      max_y1, max_y2);
 
-                    // Extract D entries
+                    // Extract D entries for all valid (y1, y2) combinations
                     fill_D_entries(al, bl,
                                    static_cast<size_type>(x1),
                                    static_cast<size_type>(x2));
@@ -933,19 +919,30 @@ ShiftAligner::align_in_arcmatch(size_type al, size_type ar,
     // - (x1, x2): Sequence positions at left end (can shift from al, bl)
     // - (y1, y2): Sequence positions at right end (can shift from ar, br)
     //
+    // IMPORTANT: Each call creates a fresh M matrix for this specific
+    // (x1, x2, al, bl) starting column. The M matrix entries are
+    // independent between different starting columns.
+    //
     // Steps:
-    // 1. Initialize M matrix boundaries: init_M(...)
-    // 2. For each structure position (y3, y4) in [al+1, ar-1] x [bl+1, br-1]:
+    // 1. Create fresh M matrix and fill with -infinity
+    // 2. Initialize M matrix boundaries: init_M(...)
+    // 3. For each structure position (y3, y4) in [al+1, ar-1] x [bl+1, br-1]:
     //    For each valid sequence position (seq_y1, seq_y2):
     //      M(seq_y1, seq_y2, y3, y4) = align_noex(...)
     //
-    // The iteration order matters:
-    // - Structure positions y3, y4 go from al+1 to ar-1
-    // - Sequence positions must stay within shift of structure positions
-    //
-    // Key insight: At each structure position (y3, y4), we compute
-    // M values for all valid sequence positions around it.
+    // Future optimization: Only allocate the slice between
+    // (x1, x2, al, bl) and (y1, y2, ar, br) instead of the full matrix.
     // ------------------------------------------------------------
+
+    // Create fresh M matrix for this arc region
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
+    M_ = std::make_unique<LocARNA::ShiftMatrixM<score_t>>(
+        lenA + 1,
+        lenB + 1,
+        max_shifts_
+    );
+    M_->fill(LocARNA::infty_score_t::neg_infty);
 
     // Initialize boundaries
     init_M(al, ar, bl, br, x1, x2, y1, y2);
@@ -1037,16 +1034,12 @@ ShiftAligner::fill_D_entries(size_type al, size_type bl,
     // Note: x1, x2 are the sequence positions at the left end (passed in)
     //       y1, y2 are iterated over based on ar, br and max_shifts
     //
-    // Implementation:
-    // 1. Get arc matches at (al, bl) using common_left_end_list
-    // 2. For each arc match:
-    //    a. Get ar, br
-    //    b. Create offset matrix if needed: D_->create_offsetmatrix(...)
-    //    c. For each valid (y1, y2) within δ_max of (ar-1, br-1):
-    //       - Get M(y1, y2, ar-1, br-1)
-    //       - Compute D value = M + arcmatch_score
-    //       - Store: D_->set(arcA, arcB, x1, x2, y1, y2, D_value)
+    // The M matrix has been filled up to the maximum possible y1, y2
+    // so all valid entries are available for extraction.
     // ------------------------------------------------------------
+
+    size_type lenA = seqA_->length();
+    size_type lenB = seqB_->length();
 
     const auto& arcmatches_at_left = arc_matches_->common_left_end_list(al, bl);
 
@@ -1065,7 +1058,8 @@ ShiftAligner::fill_D_entries(size_type al, size_type bl,
         size_type y3_fixed = ar - 1;
         size_type y4_fixed = br - 1;
 
-        // Iterate over valid sequence positions at right end
+        // Iterate over all valid sequence positions at right end
+        // y1, y2 can shift within δ_max of the structure positions
         for (int shift_y1 = -static_cast<int>(max_shifts_);
              shift_y1 <= static_cast<int>(max_shifts_); ++shift_y1) {
             for (int shift_y2 = -static_cast<int>(max_shifts_);
@@ -1074,22 +1068,32 @@ ShiftAligner::fill_D_entries(size_type al, size_type bl,
                 int y1 = static_cast<int>(y3_fixed) + shift_y1;
                 int y2 = static_cast<int>(y4_fixed) + shift_y2;
 
-                // Bounds check
+                // Bounds check - y1, y2 must be inside the arc region
+                // and within sequence bounds
                 if (y1 <= static_cast<int>(al) || y2 <= static_cast<int>(bl))
                     continue;
-                if (y1 >= static_cast<int>(ar) || y2 >= static_cast<int>(br))
+                if (y1 > static_cast<int>(lenA) || y2 > static_cast<int>(lenB))
+                    continue;
+                // Also check they don't exceed the arc right ends
+                // (sequence can extend past structure but not needed here)
+                if (y1 >= static_cast<int>(ar) + static_cast<int>(max_shifts_) ||
+                    y2 >= static_cast<int>(br) + static_cast<int>(max_shifts_))
                     continue;
 
-                // Get M value
+                // Get M value - this is the score from (x1, x2, al, bl) to (y1, y2, y3_fixed, y4_fixed)
                 score_t m_score = M_->get(static_cast<size_type>(y1),
                                           static_cast<size_type>(y2),
                                           y3_fixed, y4_fixed);
 
-                // Compute D value
+                // Skip if M value was never computed (still -infinity)
+                if (m_score == score_t::neg_infty)
+                    continue;
+
+                // Compute D value = M + arcmatch_score
                 score_t arc_score = score_t(locarna_scoring_->arcmatch(am));
                 score_t d_score = m_score + arc_score;
 
-                // Store in D matrix
+                // Store in D matrix indexed by (arcA, arcB, x1, x2, y1, y2)
                 D_->set(arcA, arcB, x1, x2,
                         static_cast<size_type>(y1),
                         static_cast<size_type>(y2),
@@ -1110,40 +1114,168 @@ ShiftAligner::init_M(size_type al, size_type ar,
     // Sets up M matrix entries at the boundaries of the region.
     // This corresponds to LocARNA's init_state function.
     //
-    // Boundaries to initialize:
-    // - Left edge: y3 = al (structure A at left boundary)
-    // - Bottom edge: y4 = bl (structure B at left boundary)
+    // Key insight for 4D matrix initialization:
+    // - Base case: M(x1, x2, al, bl) = 0
+    // - Boundaries involve gaps in one or both layers
     //
-    // For each boundary position:
-    // - Compute gap costs from starting position (x1, x2, al, bl)
-    //
-    // Implementation:
-    // 1. M(x1, x2, al, bl) = 0 (or appropriate base case)
-    // 2. First row: M(seq_y1, x2, y3, bl) for y3 in [al+1, ar-1]
-    //    Gap cost in B for positions x2+1 to seq_y2
-    // 3. First column: M(x1, seq_y2, al, y4) for y4 in [bl+1, br-1]
-    //    Gap cost in A for positions x1+1 to seq_y1
-    //
-    // Note: Need to handle all valid sequence positions around each
-    // structure position.
-    //
-    // This is complex due to 4D nature. Key insight:
-    // - At boundary y3=al: structure A hasn't advanced, only gaps in A
-    // - At boundary y4=bl: structure B hasn't advanced, only gaps in B
+    // We need to initialize all positions where at least one index
+    // is at the boundary (al or bl for structure, x1 or x2 for sequence).
     // ------------------------------------------------------------
-
-    // TODO: Implement proper boundary initialization
-    // This requires careful handling of the 4D matrix structure
-    // and gap cost accumulation.
 
     // Base case: starting position
     M_->set(x1, x2, al, bl, score_t(0));
 
-    // Initialize first row (y4 = bl, varying y3 and y1)
-    // ... gap costs for insertions in B
+    // Initialize boundaries where structure B is at left edge (y4 = bl)
+    // This means we're building up gaps in sequence B
+    for (size_type y3 = al; y3 < ar; ++y3) {
+        // For each valid sequence position y1 around y3
+        for (int shift1 = -static_cast<int>(max_shifts_);
+             shift1 <= static_cast<int>(max_shifts_); ++shift1) {
 
-    // Initialize first column (y3 = al, varying y4 and y2)
-    // ... gap costs for deletions in A
+            int seq_y1 = static_cast<int>(y3) + shift1;
+
+            // Bounds check
+            if (seq_y1 < static_cast<int>(x1) || seq_y1 > static_cast<int>(y1))
+                continue;
+
+            // At boundary y4=bl, y2=x2: only gaps in B accumulated
+            // Score = gap costs for A from x1 to seq_y1 + shift penalties
+            //
+            // The gap pattern is: sequence A advances, structure A advances,
+            // sequence B stays at x2, structure B stays at bl
+
+            if (seq_y1 == static_cast<int>(x1) && y3 == al) {
+                // Base case already set
+                continue;
+            }
+
+            // Compute accumulated gap cost for first row
+            // M(seq_y1, x2, y3, bl) = M(seq_y1-1, x2, y3-1, bl) + gap_A + gap_A + shift
+            // or handle the 15 column types that reach this position
+
+            score_t row_score = score_t::neg_infty;
+
+            // Try column types that keep y2=x2 and y4=bl
+            // Valid types: (1,0,1,0) - gap in B for both layers
+            //              (1,0,0,0) - gap in B for seq, gap in both for struct
+            //              (0,0,1,0) - gap in both for seq, gap in B for struct
+
+            // Type (1,0,1,0): advance sequence A and structure A
+            if (seq_y1 > static_cast<int>(x1) && y3 > al) {
+                int prev_y1 = seq_y1 - 1;
+                size_type prev_y3 = y3 - 1;
+
+                if (valid_shift(prev_y1, prev_y3)) {
+                    score_t pred = M_->get(prev_y1, x2, prev_y3, bl);
+                    score_t u_s = score_t(locarna_scoring_->gapA(seq_y1));
+                    score_t v_s = score_t(locarna_scoring_->gapA(y3));
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::DEL_A, ColumnType::DEL_A);
+                    row_score = std::max(row_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            // Type (1,0,0,0): advance sequence A only
+            if (seq_y1 > static_cast<int>(x1)) {
+                int prev_y1 = seq_y1 - 1;
+
+                if (valid_shift(prev_y1, y3)) {
+                    score_t pred = M_->get(prev_y1, x2, y3, bl);
+                    score_t u_s = score_t(locarna_scoring_->gapA(seq_y1));
+                    score_t v_s = score_t(0);  // structure gap in both
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::DEL_A, ColumnType::MATCH);
+                    row_score = std::max(row_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            // Type (0,0,1,0): advance structure A only
+            if (y3 > al) {
+                size_type prev_y3 = y3 - 1;
+
+                if (valid_shift(seq_y1, prev_y3)) {
+                    score_t pred = M_->get(seq_y1, x2, prev_y3, bl);
+                    score_t u_s = score_t(0);  // sequence gap in both
+                    score_t v_s = score_t(locarna_scoring_->gapA(y3));
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::MATCH, ColumnType::DEL_A);
+                    row_score = std::max(row_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            if (row_score > score_t::neg_infty) {
+                M_->set(seq_y1, x2, y3, bl, row_score);
+            }
+        }
+    }
+
+    // Initialize boundaries where structure A is at left edge (y3 = al)
+    // This means we're building up gaps in sequence A
+    for (size_type y4 = bl; y4 < br; ++y4) {
+        // For each valid sequence position y2 around y4
+        for (int shift2 = -static_cast<int>(max_shifts_);
+             shift2 <= static_cast<int>(max_shifts_); ++shift2) {
+
+            int seq_y2 = static_cast<int>(y4) + shift2;
+
+            // Bounds check
+            if (seq_y2 < static_cast<int>(x2) || seq_y2 > static_cast<int>(y2))
+                continue;
+
+            if (seq_y2 == static_cast<int>(x2) && y4 == bl) {
+                // Base case already set
+                continue;
+            }
+
+            score_t col_score = score_t::neg_infty;
+
+            // Try column types that keep y1=x1 and y3=al
+            // Valid types: (0,1,0,1) - gap in A for both layers
+            //              (0,1,0,0) - gap in A for seq, gap in both for struct
+            //              (0,0,0,1) - gap in both for seq, gap in A for struct
+
+            // Type (0,1,0,1): advance sequence B and structure B
+            if (seq_y2 > static_cast<int>(x2) && y4 > bl) {
+                int prev_y2 = seq_y2 - 1;
+                size_type prev_y4 = y4 - 1;
+
+                if (valid_shift(prev_y2, prev_y4)) {
+                    score_t pred = M_->get(x1, prev_y2, al, prev_y4);
+                    score_t u_s = score_t(locarna_scoring_->gapB(seq_y2));
+                    score_t v_s = score_t(locarna_scoring_->gapB(y4));
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::INS_A, ColumnType::INS_A);
+                    col_score = std::max(col_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            // Type (0,1,0,0): advance sequence B only
+            if (seq_y2 > static_cast<int>(x2)) {
+                int prev_y2 = seq_y2 - 1;
+
+                if (valid_shift(prev_y2, y4)) {
+                    score_t pred = M_->get(x1, prev_y2, al, y4);
+                    score_t u_s = score_t(locarna_scoring_->gapB(seq_y2));
+                    score_t v_s = score_t(0);  // structure gap in both
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::INS_A, ColumnType::MATCH);
+                    col_score = std::max(col_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            // Type (0,0,0,1): advance structure B only
+            if (y4 > bl) {
+                size_type prev_y4 = y4 - 1;
+
+                if (valid_shift(seq_y2, prev_y4)) {
+                    score_t pred = M_->get(x1, seq_y2, al, prev_y4);
+                    score_t u_s = score_t(0);  // sequence gap in both
+                    score_t v_s = score_t(locarna_scoring_->gapB(y4));
+                    score_t w_s = shift_scoring_.shift_penalty(ColumnType::MATCH, ColumnType::INS_A);
+                    col_score = std::max(col_score, score_t(pred + u_s + v_s + w_s));
+                }
+            }
+
+            if (col_score > score_t::neg_infty) {
+                M_->set(x1, seq_y2, al, y4, col_score);
+            }
+        }
+    }
 }
 
 ShiftAligner::score_t
@@ -1155,30 +1287,96 @@ ShiftAligner::compute_unpaired_score(size_type al, size_type bl,
     // Compute best score for unpaired columns (Case 1)
     //
     // Iterates over all 15 valid column types and returns the best score.
-    // This is the existing Case 1 logic from fill_M_local.
-    //
-    // Column type (c1, c2, c3, c4):
-    // - c1, c2: sequence layer (0=gap, 1=content)
-    // - c3, c4: structure layer (0=gap, 1=content)
-    //
-    // For each column type:
-    // 1. Compute predecessor position (y1-c1, y2-c2, y3-c3, y4-c4)
-    // 2. Check bounds and δ_max constraints
-    // 3. Get predecessor M value
-    // 4. Compute column score: u_s + v_s + w_s
-    //    - u_s: sequence score (basematch or gap)
-    //    - v_s: structure score (basematch or gap)
-    //    - w_s: shift penalty
-    // 5. Update best score
-    //
-    // This should reuse the existing column type iteration logic
-    // from the current fill_M_local implementation.
+    // Extracted from fill_M_local Case 1 logic.
     // ------------------------------------------------------------
 
-    // TODO: Implement by extracting logic from fill_M_local
-    // Should iterate over all 15 column types and compute scores
+    // All 15 valid column types (excluding (0,0,0,0))
+    // Ordered to prefer no-shift columns first
+    struct Column {
+        int c1, c2, c3, c4;
+    };
 
-    return score_t::neg_infty;  // Placeholder
+    const std::vector<Column> valid_columns = {
+        // No-shift columns (3 total): c_U == c_V
+        {1,1,1,1},  // match-match
+        {1,0,1,0},  // del_A-del_A
+        {0,1,0,1},  // ins_A-ins_A
+
+        // Shift columns (12 total): c_U != c_V
+        {1,1,1,0}, {1,1,0,1}, {1,1,0,0},
+        {1,0,1,1}, {1,0,0,1}, {1,0,0,0},
+        {0,1,1,1}, {0,1,1,0}, {0,1,0,0},
+        {0,0,1,1}, {0,0,1,0}, {0,0,0,1}
+    };
+
+    score_t best_score = score_t::neg_infty;
+
+    for (const auto& col : valid_columns) {
+        // Compute predecessor position x = y - c
+        int px1 = static_cast<int>(y1) - col.c1;
+        int px2 = static_cast<int>(y2) - col.c2;
+        int px3 = static_cast<int>(y3) - col.c3;
+        int px4 = static_cast<int>(y4) - col.c4;
+
+        // Check if predecessor is within region
+        if (px1 < static_cast<int>(x1) || px2 < static_cast<int>(x2) ||
+            px3 < static_cast<int>(al) || px4 < static_cast<int>(bl))
+            continue;
+
+        // Check δ_max constraint at predecessor
+        if (std::abs(px1 - px3) > static_cast<int>(max_shifts_))
+            continue;
+        if (std::abs(px2 - px4) > static_cast<int>(max_shifts_))
+            continue;
+
+        // Get score from predecessor
+        score_t pred_score = M_->get(px1, px2, px3, px4);
+
+        // Compute column score s(y, c) = u_s + v_s + w_s
+
+        // u_s: sequence alignment score for U layer (positions y1, y2)
+        score_t u_s(0);
+        ColumnType col_U;
+        if (col.c1 == 1 && col.c2 == 1) {
+            u_s = score_t(locarna_scoring_->basematch(y1, y2));
+            col_U = ColumnType::MATCH;
+        } else if (col.c1 == 1 && col.c2 == 0) {
+            u_s = score_t(locarna_scoring_->gapA(y1));
+            col_U = ColumnType::DEL_A;
+        } else if (col.c1 == 0 && col.c2 == 1) {
+            u_s = score_t(locarna_scoring_->gapB(y2));
+            col_U = ColumnType::INS_A;
+        } else {
+            col_U = ColumnType::MATCH;  // (0,0) case
+        }
+
+        // v_s: structure score for V layer (positions y3, y4)
+        score_t v_s(0);
+        ColumnType col_V;
+        if (col.c3 == 1 && col.c4 == 1) {
+            v_s = score_t(locarna_scoring_->basematch(y3, y4));
+            col_V = ColumnType::MATCH;
+        } else if (col.c3 == 1 && col.c4 == 0) {
+            v_s = score_t(locarna_scoring_->gapA(y3));
+            col_V = ColumnType::DEL_A;
+        } else if (col.c3 == 0 && col.c4 == 1) {
+            v_s = score_t(locarna_scoring_->gapB(y4));
+            col_V = ColumnType::INS_A;
+        } else {
+            col_V = ColumnType::MATCH;  // (0,0) case
+        }
+
+        // w_s: shift penalty
+        score_t w_s = shift_scoring_.shift_penalty(col_U, col_V);
+
+        score_t total_score = pred_score + u_s + v_s + w_s;
+
+        if (total_score > best_score) {
+            best_score = total_score;
+        }
+    }
+
+    return best_score;
 }
 
 ShiftAligner::score_t
@@ -1190,31 +1388,139 @@ ShiftAligner::compute_paired_score(size_type al, size_type bl,
     // Compute best score for paired columns (Case 2)
     //
     // Iterates over all arc matches with right ends at (y3, y4).
-    // Uses common_right_end_list to find these arc matches.
-    //
-    // For each arc match:
-    //   z3 = arcA.left(), z4 = arcB.left()
-    //
-    //   For each valid (z1, z2) within δ_max of (z3, z4):
-    //     For each gap pattern (c1_z, c2_z, 1, 1) for z-column:
-    //       For each gap pattern (c1_y, c2_y, 1, 1) for y-column:
-    //
-    //         Predecessor: M(z1-c1_z, z2-c2_z, z3-1, z4-1)
-    //         D value: D(am, z1, z2, y1, y2)
-    //         Column scores: z-column + y-column (sequence + structure + shift)
-    //
-    //         Score = predecessor + D + z_col_score + y_col_score
-    //
-    // This should reuse the existing Case 2 logic from fill_M_local.
-    //
-    // Note: Arc right ends must match (y3, y4), not (y1, y2)
-    // The sequence positions (y1, y2) can shift from structure positions.
+    // Extracted from fill_M_local Case 2 logic.
     // ------------------------------------------------------------
 
-    // TODO: Implement by extracting logic from fill_M_local
-    // Should use common_right_end_list(y3, y4)
+    score_t best_score = score_t::neg_infty;
 
-    return score_t::neg_infty;  // Placeholder
+    // Get all arc matches with right ends at current structure positions (y3, y4)
+    const auto& arcmatches_at_right = arc_matches_->common_right_end_list(y3, y4);
+
+    for (const auto& am_idx : arcmatches_at_right) {
+        const auto& arc_match = arc_matches_->arcmatch(am_idx);
+        const auto& arcA = arc_match.arcA();
+        const auto& arcB = arc_match.arcB();
+
+        size_type z3 = arcA.left();   // Left arc endpoint in structure A
+        size_type z4 = arcB.left();   // Left arc endpoint in structure B
+
+        // Arc must be inside current region
+        if (z3 <= al || z4 <= bl)
+            continue;
+
+        // Iterate over all possible sequence positions z1, z2 at arc left ends
+        for (int shift_z1 = -static_cast<int>(max_shifts_);
+             shift_z1 <= static_cast<int>(max_shifts_); ++shift_z1) {
+            for (int shift_z2 = -static_cast<int>(max_shifts_);
+                 shift_z2 <= static_cast<int>(max_shifts_); ++shift_z2) {
+
+                int z1 = static_cast<int>(z3) + shift_z1;
+                int z2 = static_cast<int>(z4) + shift_z2;
+
+                // Check bounds for z positions
+                if (z1 < static_cast<int>(x1) || z2 < static_cast<int>(x2))
+                    continue;
+
+                // Iterate over valid gap patterns for z-column (arc left ends)
+                for (int c1_z = 0; c1_z <= 1; ++c1_z) {
+                    for (int c2_z = 0; c2_z <= 1; ++c2_z) {
+
+                        // Iterate over valid gap patterns for y-column (arc right ends)
+                        for (int c1_y = 0; c1_y <= 1; ++c1_y) {
+                            for (int c2_y = 0; c2_y <= 1; ++c2_y) {
+
+                                // M score before arc left endpoints
+                                int px1 = z1 - c1_z;
+                                int px2 = z2 - c2_z;
+                                int px3 = static_cast<int>(z3) - 1;
+                                int px4 = static_cast<int>(z4) - 1;
+
+                                // Check bounds
+                                if (px1 < static_cast<int>(x1) || px2 < static_cast<int>(x2) ||
+                                    px3 < static_cast<int>(al) || px4 < static_cast<int>(bl))
+                                    continue;
+
+                                // Check δ_max constraint at predecessor
+                                if (std::abs(px1 - px3) > static_cast<int>(max_shifts_))
+                                    continue;
+                                if (std::abs(px2 - px4) > static_cast<int>(max_shifts_))
+                                    continue;
+
+                                // Get M score before the arc
+                                score_t m_before = M_->get(px1, px2, px3, px4);
+
+                                // D score: optimal alignment inside matched arcs
+                                score_t d_score = D_->get(arcA, arcB, z1, z2, y1, y2);
+
+                                // Arc match score from LocARNA
+                                score_t arc_score = score_t(locarna_scoring_->arcmatch(arc_match));
+
+                                // z-column scoring (sequence layer only)
+                                // Structure layer score is in arcmatch_score, not here
+                                score_t z_col_score(0);
+                                ColumnType col_U_z;
+                                score_t u_s_z(0);
+
+                                if (c1_z == 1 && c2_z == 1) {
+                                    u_s_z = score_t(locarna_scoring_->basematch(z1, z2));
+                                    col_U_z = ColumnType::MATCH;
+                                } else if (c1_z == 1 && c2_z == 0) {
+                                    u_s_z = score_t(locarna_scoring_->gapA(z1));
+                                    col_U_z = ColumnType::DEL_A;
+                                } else if (c1_z == 0 && c2_z == 1) {
+                                    u_s_z = score_t(locarna_scoring_->gapB(z2));
+                                    col_U_z = ColumnType::INS_A;
+                                } else {
+                                    col_U_z = ColumnType::MATCH;
+                                }
+
+                                // Structure layer always has content in Case 2 (MATCH)
+                                // but score is 0 here - structure contribution is in arc_score
+                                ColumnType col_V_z = ColumnType::MATCH;
+
+                                score_t w_s_z = shift_scoring_.shift_penalty(col_U_z, col_V_z);
+                                z_col_score = u_s_z + w_s_z;
+
+                                // y-column scoring (sequence layer only)
+                                score_t y_col_score(0);
+                                ColumnType col_U_y;
+                                score_t u_s_y(0);
+
+                                if (c1_y == 1 && c2_y == 1) {
+                                    u_s_y = score_t(locarna_scoring_->basematch(y1, y2));
+                                    col_U_y = ColumnType::MATCH;
+                                } else if (c1_y == 1 && c2_y == 0) {
+                                    u_s_y = score_t(locarna_scoring_->gapA(y1));
+                                    col_U_y = ColumnType::DEL_A;
+                                } else if (c1_y == 0 && c2_y == 1) {
+                                    u_s_y = score_t(locarna_scoring_->gapB(y2));
+                                    col_U_y = ColumnType::INS_A;
+                                } else {
+                                    col_U_y = ColumnType::MATCH;
+                                }
+
+                                // Structure layer always has content in Case 2 (MATCH)
+                                ColumnType col_V_y = ColumnType::MATCH;
+
+                                score_t w_s_y = shift_scoring_.shift_penalty(col_U_y, col_V_y);
+                                y_col_score = u_s_y + w_s_y;
+
+                                // Total score
+                                score_t total_score = m_before + d_score + arc_score +
+                                                      z_col_score + y_col_score;
+
+                                if (total_score > best_score) {
+                                    best_score = total_score;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return best_score;
 }
 
 } // namespace RNAShiftAlign
