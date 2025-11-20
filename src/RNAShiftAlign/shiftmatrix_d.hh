@@ -232,6 +232,43 @@ namespace LocARNA {
         transform(UnaryOperator f) {
             std::transform(mat_.begin(), mat_.end(), mat_.begin(), f);
         }
+
+        /**
+         * @brief Print matrix contents for debugging
+         *
+         * Outputs all entries including infinity values to help identify
+         * which entries were not filled during computation.
+         *
+         * @param os Output stream
+         * @param is_neg_infty Function to check if value is negative infinity
+         */
+        template <class Predicate>
+        void
+        debug_print(std::ostream& os, Predicate is_neg_infty) const {
+            os << "  === Offset Matrix (4D: x1, x2, y1, y2) ===\n";
+            os << "  max_shifts=" << maxshift_ << "\n";
+
+            int count = 0;
+            int infty_count = 0;
+            for (int x1 = -static_cast<int>(maxshift_); x1 <= static_cast<int>(maxshift_); ++x1) {
+                for (int x2 = -static_cast<int>(maxshift_); x2 <= static_cast<int>(maxshift_); ++x2) {
+                    for (int y1 = -static_cast<int>(maxshift_); y1 <= static_cast<int>(maxshift_); ++y1) {
+                        for (int y2 = -static_cast<int>(maxshift_); y2 <= static_cast<int>(maxshift_); ++y2) {
+                            const elem_t& val = mat_[addr(x1, x2, y1, y2)];
+                            if (is_neg_infty(val)) {
+                                os << "    (" << x1 << "," << x2 << "," << y1 << "," << y2 << ") = -INF\n";
+                                ++infty_count;
+                            } else {
+                                os << "    (" << x1 << "," << x2 << "," << y1 << "," << y2 << ") = " << val << "\n";
+                            }
+                            ++count;
+                        }
+                    }
+                }
+            }
+
+            os << "  Entries: " << count << " (finite: " << (count - infty_count) << ", -INF: " << infty_count << ")\n";
+        }
     };
 
     /*
@@ -386,6 +423,39 @@ namespace LocARNA {
         set(Arc a, Arc b, size_type x1, size_type x2, size_type y1, size_type y2,
             const elem_t &x) {
             mat_(a.idx(), b.idx())(x1-a.left(), x2-b.left(), y1-a.right(), y2-b.right()) = x;
+        }
+
+        /**
+         * @brief Print matrix contents for debugging
+         *
+         * Outputs all entries in the D matrix including infinity values
+         * to help identify which entries were not filled during computation.
+         *
+         * @param os Output stream
+         * @param is_neg_infty Function to check if value is negative infinity
+         */
+        template <class Predicate>
+        void
+        debug_print(std::ostream& os, Predicate is_neg_infty) const {
+            os << "=== D Matrix (6D: arcA_idx, arcB_idx, x1, x2, y1, y2) ===\n";
+            os << "Dimensions: a_bps=" << a_bps_dim_ << ", b_bps=" << b_bps_dim_ << "\n";
+            os << "max_shifts=" << maxshift_ << "\n\n";
+
+            int arc_pair_count = 0;
+            for (size_type a = 0; a < a_bps_dim_; ++a) {
+                for (size_type b = 0; b < b_bps_dim_; ++b) {
+                    const auto& offset_mat = mat_(a, b);
+                    // Check if offset matrix is allocated (dim > 0)
+                    if (std::get<0>(offset_mat.sizes()) == 0)
+                        continue;
+
+                    os << "Arc pair (" << a << "," << b << "):\n";
+                    offset_mat.debug_print(os, is_neg_infty);
+                    ++arc_pair_count;
+                }
+            }
+
+            os << "\nTotal arc pairs with allocated offset matrices: " << arc_pair_count << "\n";
         }
     };
 
