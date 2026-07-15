@@ -1,4 +1,4 @@
-AC_INIT([RNAShiftAlign],[0.1.0],[maria@bioinf.uni-leipzig.de])
+AC_INIT([RNAShiftAlign],[0.1.0],[code@waldl.org])
 
 AC_CONFIG_SRCDIR([src/RNAShiftAlign.cc])
 AC_CONFIG_AUX_DIR(config)
