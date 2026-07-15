@@ -22,7 +22,7 @@
 #include <tuple>
 #include <string>
 
-namespace LocARNA {
+namespace RNAShiftAlign {
 
     /**
      * @brief 4D matrix class for shift bi-alignments
@@ -271,7 +271,16 @@ namespace LocARNA {
             size_type y3,
             size_type y4,
             const elem_t &x) {
-            mat_[addr(y1, y2, y3, y4)] = x;
+            size_type idx = addr(y1, y2, y3, y4);
+            if (idx >= mat_.size()) {
+                throw std::out_of_range(
+                    "ShiftMatrixM::set() computed index out of range: idx=" + std::to_string(idx) +
+                    " >= size=" + std::to_string(mat_.size()) +
+                    " for coordinates (" + std::to_string(y1) + "," + std::to_string(y2) + "," +
+                    std::to_string(y3) + "," + std::to_string(y4) + ")"
+                );
+            }
+            mat_[idx] = x;
         }
 
         /**
@@ -359,6 +368,6 @@ namespace LocARNA {
         }
     };
 
-} // end namespace LocARNA
+} // end namespace RNAShiftAlign
 
 #endif // RNASHIFTALIGN_SHIFTMATRIX_M_HH

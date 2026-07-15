@@ -22,13 +22,19 @@
 #include <LocARNA/matrix.hh>
 #include <LocARNA/basepairs.hh>
 
-namespace LocARNA {
+namespace RNAShiftAlign {
 
-    /*
-      Define classe for the offsets in the sequence alignment for the for
-      indices that define the two matched arcs.  Provides access via operator
-      (int,int,int,int)
-    */
+    using LocARNA::Matrix;
+    using LocARNA::BasePairs__Arc;
+
+    /**
+     * @brief 4D matrix of sequence-alignment offsets at the endpoints of one
+     *        matched arc pair.
+     *
+     * Indexed by the four offsets (x1, x2, y1, y2), each in
+     * [-maxshift, +maxshift], where (x1, x2) are the offsets at the arcs' left
+     * ends and (y1, y2) those at their right ends.
+     */
     template <class T>
     class ShiftOffsetMatrix {
     public:
@@ -50,7 +56,7 @@ namespace LocARNA {
          * @param x1 shift at beginning of matched arc in first sequence
          * @param x2 shift at beginning of matched arc in second sequence
          * @param y1 shift at end of matched arc in first sequence
-         * @param y2 shift at end of matched arc in first sequence
+         * @param y2 shift at end of matched arc in second sequence
          *
          * @return index in vector
          * @note this method is used for all internal access to the vector mat_
@@ -207,15 +213,14 @@ namespace LocARNA {
 
         /**
          * Clear the matrix
-         * @post the matrix is resized to dimensions (0,0,0,0)
+         * @post the matrix is empty and reports dim_ == 0 (i.e. unallocated)
          * @note behaves like std::vector::clear()
          */
         void
         clear() {
-            mat_.resize(0); // todo: is this needed?
-            dim_ = 0;       // todo: is this needed?
-            maxshift_ = 0;  // todo: is this needed?
             mat_.clear();
+            dim_ = 0;
+            maxshift_ = 0;
         }
 
         /**
@@ -246,7 +251,8 @@ namespace LocARNA {
         void
         debug_print(std::ostream& os, Predicate is_neg_infty) const {
             os << "  === Offset Matrix (4D: x1, x2, y1, y2) ===\n";
-            os << "  max_shifts=" << maxshift_ << "\n";
+            os << "  max_shifts=" << maxshift_ << ", dim=" << dim_ << "\n";
+            os.flush();
 
             int count = 0;
             int infty_count = 0;
@@ -254,9 +260,9 @@ namespace LocARNA {
                 for (int x2 = -static_cast<int>(maxshift_); x2 <= static_cast<int>(maxshift_); ++x2) {
                     for (int y1 = -static_cast<int>(maxshift_); y1 <= static_cast<int>(maxshift_); ++y1) {
                         for (int y2 = -static_cast<int>(maxshift_); y2 <= static_cast<int>(maxshift_); ++y2) {
-                            const elem_t& val = mat_[addr(x1, x2, y1, y2)];
+                            size_type idx = addr(x1, x2, y1, y2);
+                            const elem_t& val = mat_[idx];
                             if (is_neg_infty(val)) {
-                                os << "    (" << x1 << "," << x2 << "," << y1 << "," << y2 << ") = -INF\n";
                                 ++infty_count;
                             } else {
                                 os << "    (" << x1 << "," << x2 << "," << y1 << "," << y2 << ") = " << val << "\n";
@@ -268,12 +274,22 @@ namespace LocARNA {
             }
 
             os << "  Entries: " << count << " (finite: " << (count - infty_count) << ", -INF: " << infty_count << ")\n";
+            os.flush();
         }
     };
 
-    /*
-      Define classe for 6D D matrix for shift alignment.
-    */
+    /**
+     * @brief 6D D matrix for shift alignments.
+     *
+     * D(arcA, arcB, x1, x2, y1, y2) is the best score for aligning the contents
+     * of a matched arc pair whose left endpoints sit at sequence positions
+     * (x1, x2) and whose right endpoints sit at (y1, y2). The score bundles the
+     * left endpoint column, the arc interior, the right endpoint column, and the
+     * arc-match reward.
+     *
+     * Layout: a 2D matrix over base-pair indices, each cell holding a
+     * ShiftOffsetMatrix allocated lazily via create_offsetmatrix().
+     */
     template <class T>
     class ShiftMatrixD {
     public:
@@ -354,14 +370,30 @@ namespace LocARNA {
         }
 
         /**
-         * resize offset matrix for matched enclosing accoring to maxshift
+         * resize offset matrix for matched enclosing according to maxshift
          *
          * @param a index of bp in RNA a
          * @param b index of bp in RNA b
+         *
+         * @post the offset matrix at (a,b) is resized and filled with -infinity
          */
         void
         create_offsetmatrix(size_type a, size_type b) {
             mat_(a, b).resize(maxshift_);
+            mat_(a, b).fill(elem_t::neg_infty);  // Initialize all entries to -infinity
+        }
+
+        /**
+         * Check if offset matrix is allocated
+         *
+         * @param a index of bp in RNA a
+         * @param b index of bp in RNA b
+         *
+         * @return true if the offset matrix at (a,b) has been allocated
+         */
+        bool
+        is_offsetmatrix_allocated(size_type a, size_type b) const {
+            return std::get<0>(mat_(a, b).sizes()) > 0;
         }
 
         /**
@@ -398,13 +430,20 @@ namespace LocARNA {
          * @param x1 index at beginning of matched arc in first sequence
          * @param x2 index at beginning of matched arc in second sequence
          * @param y1 index at end of matched arc in first sequence
-         * @param y2 index at end of matched arc in first sequence
+         * @param y2 index at end of matched arc in second sequence
          *
          * @return entry (a,b,x1,x2,y1,y2)
          */
         const elem_t
         get(Arc a, Arc b, size_type x1, size_type x2, size_type y1, size_type y2) const {
-            return mat_(a.idx(), b.idx())(x1-a.left(), x2-b.left(), y1-a.right(), y2-b.right());
+            // D matrix offsets are relative to arc endpoints
+            // x1, x2 are sequence positions aligned to left arc ends (a.left(), b.left())
+            // y1, y2 are sequence positions aligned to right arc ends (a.right(), b.right())
+            int x_off1 = static_cast<int>(x1) - static_cast<int>(a.left());
+            int x_off2 = static_cast<int>(x2) - static_cast<int>(b.left());
+            int y_off1 = static_cast<int>(y1) - static_cast<int>(a.right());
+            int y_off2 = static_cast<int>(y2) - static_cast<int>(b.right());
+            return mat_(a.idx(), b.idx())(x_off1, x_off2, y_off1, y_off2);
         }
 
         /**
@@ -415,14 +454,21 @@ namespace LocARNA {
          * @param x1 index at beginning of matched arc in first sequence
          * @param x2 index at beginning of matched arc in second sequence
          * @param y1 index at end of matched arc in first sequence
-         * @param y2 index at end of matched arc in first sequence
+         * @param y2 index at end of matched arc in second sequence
          * @param x element value
          *
          */
         void
         set(Arc a, Arc b, size_type x1, size_type x2, size_type y1, size_type y2,
             const elem_t &x) {
-            mat_(a.idx(), b.idx())(x1-a.left(), x2-b.left(), y1-a.right(), y2-b.right()) = x;
+            // D matrix offsets are relative to arc endpoints
+            // x1, x2 are sequence positions aligned to left arc ends (a.left(), b.left())
+            // y1, y2 are sequence positions aligned to right arc ends (a.right(), b.right())
+            int x_off1 = static_cast<int>(x1) - static_cast<int>(a.left());
+            int x_off2 = static_cast<int>(x2) - static_cast<int>(b.left());
+            int y_off1 = static_cast<int>(y1) - static_cast<int>(a.right());
+            int y_off2 = static_cast<int>(y2) - static_cast<int>(b.right());
+            mat_(a.idx(), b.idx())(x_off1, x_off2, y_off1, y_off2) = x;
         }
 
         /**
@@ -444,13 +490,21 @@ namespace LocARNA {
             int arc_pair_count = 0;
             for (size_type a = 0; a < a_bps_dim_; ++a) {
                 for (size_type b = 0; b < b_bps_dim_; ++b) {
+                    os << "Checking arc pair (" << a << "," << b << ")...\n";
+                    os.flush();
                     const auto& offset_mat = mat_(a, b);
                     // Check if offset matrix is allocated (dim > 0)
-                    if (std::get<0>(offset_mat.sizes()) == 0)
+                    if (std::get<0>(offset_mat.sizes()) == 0) {
+                        os << "  Skipping (not allocated)\n";
+                        os.flush();
                         continue;
+                    }
 
-                    os << "Arc pair (" << a << "," << b << "):\n";
+                    os << "Arc pair (" << a << "," << b << ") is allocated, printing offset matrix...\n";
+                    os.flush();
                     offset_mat.debug_print(os, is_neg_infty);
+                    os << "  Done printing arc pair (" << a << "," << b << ")\n";
+                    os.flush();
                     ++arc_pair_count;
                 }
             }
@@ -459,6 +513,6 @@ namespace LocARNA {
         }
     };
 
-} // end namespace LocARNA
+} // end namespace RNAShiftAlign
 
 #endif // RNASHIFTALIGN_SHIFTMATRIX_D_HH
