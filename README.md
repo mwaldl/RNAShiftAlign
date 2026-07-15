@@ -21,39 +21,17 @@ that can represent local shifts between sequence and structure conservation.
 
 Based on the paper "Incongruences Between Sequence and Secondary Structure
 Alignments of Nucleic Acids" by Waldl et al., implementing:
-- Extension of Sankoff algorithm for simultaneous alignment and folding
+- Extension of Sankoff algorithm for simultaneous alignment 
 - 4-way alignment representation with shift scoring
 - Heuristic optimizations for practical runtime (O(n²) with δ_max constraint)
 
 ## Development Status
 
-🚧 **In active development** 🚧
-
-This is a ground-up implementation based on LocARNA, developed in a test-driven manner.
-
-**Current Version:** 0.1.0
-**Current Branch:** `main` (stable), `develop` (active development)
-
-See [CHANGELOG.md](CHANGELOG.md) for version history and changes.
-
-## Contributing
-
-We use a Git Flow branching model:
-- **`main`**: Stable releases only
-- **`develop`**: Active development
-- **`feature/*`**: Individual features
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-## Building
-
-Dependencies:
-- LocARNA library (>= 2.0.0)
-- ViennaRNA package (>= 2.5.1)
-- C++14 compiler
-
-Build instructions coming soon.
+Currently under development. Please check develop branch for source code and
+installation instructions.
 
 ## Authors
 
 Maria Waldl and collaborators
+
+Based on Locarna by Sebastian Will https://github.com/s-will/LocARNA.
