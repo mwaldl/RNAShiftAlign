@@ -23,7 +23,7 @@ Makefile.in
 /missing
 /stamp-h1
 *.m4
-!m4/
+!m4/*.m4
 
 # Binaries
 /rnashiftalign
@@ -38,14 +38,11 @@ test_shift_aligner
 *~
 .*.swp
 .vscode/
-.idea/
 
 # Test results
 *.log
 *.trs
-IMPLEMENTATION_PLAN.md
 
 # Local build scripts (personal, not for repo)
 build.sh
 BUILD_SETUP.md
-test_output.cc
