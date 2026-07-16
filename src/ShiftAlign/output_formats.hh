@@ -14,7 +14,7 @@
 #include <sstream>
 #include <iomanip>
 #include <ctime>
-#include "RNAShiftAlign/shift_aligner.hh"
+#include "ShiftAlign/shift_aligner.hh"
 
 namespace RNAShiftAlign {
 

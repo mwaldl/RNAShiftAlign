@@ -14,8 +14,8 @@
 #include <stdexcept>
 #include <getopt.h>
 #include <LocARNA/stopwatch.hh>
-#include "RNAShiftAlign/shift_aligner.hh"
-#include "RNAShiftAlign/output_formats.hh"
+#include "ShiftAlign/shift_aligner.hh"
+#include "ShiftAlign/output_formats.hh"
 
 using namespace RNAShiftAlign;
 

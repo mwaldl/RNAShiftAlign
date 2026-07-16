@@ -2,7 +2,7 @@
 
 #include <cassert>
 #include <algorithm>
-#include <RNAShiftAlign/shiftmatrix_m.hh>
+#include <ShiftAlign/shiftmatrix_m.hh>
 
 using namespace RNAShiftAlign;
 

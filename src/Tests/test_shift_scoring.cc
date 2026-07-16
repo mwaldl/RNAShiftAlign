@@ -1,5 +1,5 @@
 #include "catch.hpp"
-#include "RNAShiftAlign/shift_scoring.hh"
+#include "ShiftAlign/shift_scoring.hh"
 
 using namespace RNAShiftAlign;
 using score_t = ShiftScoring::score_t;

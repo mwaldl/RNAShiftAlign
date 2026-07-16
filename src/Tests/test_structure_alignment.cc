@@ -1,7 +1,7 @@
 #include "catch.hpp"
 
-#include <RNAShiftAlign/shift_aligner.hh>
-#include <RNAShiftAlign/shift_scoring.hh>
+#include <ShiftAlign/shift_aligner.hh>
+#include <ShiftAlign/shift_scoring.hh>
 
 using namespace RNAShiftAlign;
 using score_t = ShiftAligner::score_t;

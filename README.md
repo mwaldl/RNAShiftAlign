@@ -17,7 +17,7 @@ their secondary structure. This can produces cases where:
 A standard 2 way alignment must choose one assignment for seqeunce and structure
 ; it cannot express cases where
 the sequence-optimal and structure-optimal alignments disagree. RNAShiftAlign
-computes a *bi-alignment*: two coupled alignments of the same sequence pair —
+computes a *bi-alignment*: two coupled alignments of the same RNA pair —
 a **sequence layer** (U) and a **structure layer** (V) — together with a
 per-column **shift annotation** (W) that marks where the two layers diverge.
 The number of positions the two layers may drift apart is bounded by

@@ -3,7 +3,7 @@
 #include <cassert>
 #include <algorithm>
 #include <LocARNA/scoring_fwd.hh>
-#include <RNAShiftAlign/shiftmatrix_d.hh>
+#include <ShiftAlign/shiftmatrix_d.hh>
 
 using namespace RNAShiftAlign;
 
