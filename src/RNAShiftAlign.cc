@@ -224,8 +224,8 @@ main(int argc, char **argv) {
         if (!quiet) {
             std::cout << "No input files specified, using default test sequences\n";
         }
-        seqA = "CCCCAAAGGG";
-        seqB = "CCCAAAUGGG";
+        seqA = "AAGGCUCUAUUAACUGGUAUCGGCUAUAG";
+        seqB = "AAUGAUCUAUGAACUGUUAUCUGAUUUAG";
     } else {
         std::cerr << "Error: provide either 0 or 2 positional arguments (FASTA files)\n";
         print_usage(argv[0]);
