@@ -9,12 +9,13 @@ the homologous sequence positions over the course of evolution.
 ## Overview
 
 RNA molecules can evolve under independent selection on their sequence and on
-their secondary structure. This produces cases where:
+their secondary structure. This can produces cases where:
 
 - structurally equivalent base pairs involve non-homologous sequence positions, and
 - homologous sequence positions no longer preserve a base pair.
 
-A standard alignment must choose one column assignment; it cannot express that
+A standard 2 way alignment must choose one assignment for seqeunce and structure
+; it cannot express cases where
 the sequence-optimal and structure-optimal alignments disagree. RNAShiftAlign
 computes a *bi-alignment*: two coupled alignments of the same sequence pair —
 a **sequence layer** (U) and a **structure layer** (V) — together with a
@@ -23,40 +24,70 @@ The number of positions the two layers may drift apart is bounded by
 `--max-shifts`.
 
 The method is an extension of the Sankoff algorithm for simultaneous alignment
-and folding, described in *"Incongruences Between Sequence and Secondary
+and folding, and it is described in *"Incongruences Between Sequence and Secondary
 Structure Alignments of Nucleic Acids"* (Waldl et al. 2026).
 
 ## Dependencies
 
-- A **C++14** compiler
-- **[LocARNA](https://github.com/s-will/LocARNA) ≥ 2.0** 
+- A **C++14** compiler (GCC ≥ 5 or Clang ≥ 3.4)
+- **[LocARNA](https://github.com/s-will/LocARNA) ≥ 2.0** — including its
+  development files (headers and `LocARNA-2.0.pc`)
 - **[ViennaRNA](https://www.tbi.univie.ac.at/RNA/) ≥ 2.5.1** — pulled in
   automatically as a dependency of LocARNA
 - **pkg-config** and the **GNU Autotools** (autoconf, automake)
 
-LocARNA's `pkg-config` file (`LocARNA-2.0.pc`) must be discoverable, i.e. its
-directory must be on `PKG_CONFIG_PATH`. LocARNA and ViennaRNA can be installed,
-for example, via conda/bioconda:
-
-```bash
-conda install -c bioconda locarna viennarna
-```
-
 ## Installation
 
-Standard Autotools, out-of-tree build:
+### With conda
 
 ```bash
-autoreconf -i                       # generate ./configure (first checkout only)
-./configure                         # or: ./configure --prefix=$HOME/.local
-make
-make install                        # optional; installs the rnashiftalign binary
+conda create -n shift
+conda activate shift
+conda install -c conda-forge -c bioconda cxx-compiler pkg-config locarna
 ```
 
-If `configure` cannot find LocARNA, point `pkg-config` at it:
+```bash
+autoreconf -i                     # generate ./configure (first checkout only)
+./configure --prefix=$CONDA_PREFIX
+make
+make install
+```
+
+### Without conda
+
+Install a C++14 compiler, pkg-config and the Autotools, for example, via your system package
+manager.
+
+Ubuntu:
+```bash
+sudo apt install g++ pkg-config autoconf automake
+```
+
+LocARNA (and ViennaRNA) must then be built and installed from source; see the
+[LocARNA documentation](https://github.com/s-will/LocARNA). If they are
+installed under a non-standard prefix, point pkg-config at them:
 
 ```bash
-PKG_CONFIG_PATH=/path/to/locarna/lib/pkgconfig ./configure
+export PKG_CONFIG_PATH=/path/to/locarna/lib/pkgconfig
+```
+
+```bash
+autoreconf -i
+./configure --prefix=$HOME/.local
+make
+make install
+```
+
+### Install prefix
+
+`./configure` defaults to `--prefix=/usr/local`, so a plain `make install`
+requires root. To install without `sudo`, pass a prefix you own — for example
+`$CONDA_PREFIX` inside an active conda environment, or `$HOME/.local` (make sure
+`$HOME/.local/bin` is on your `PATH`). Installation can also be skipped entirely
+by running the binary from the build tree:
+
+```bash
+./src/rnashiftalign
 ```
 
 ## Usage
@@ -142,6 +173,10 @@ The computation can be sped up by pruning the set of base pairs and arc matches
 considered: raise `--min-prob` to require a higher ensemble probability before a
 base pair is kept, and use `--max-bps-length-ratio`, `--max-diff-am`, and
 `--max-diff-at-am` to restrict which base pairs may be matched.
+
+### Example input sequences
+
+Example input files can be found in `src/Tests/Data`.
 
 ## How it works (program flow)
 
