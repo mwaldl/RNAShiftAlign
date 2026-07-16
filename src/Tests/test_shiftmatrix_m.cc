@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <RNAShiftAlign/shiftmatrix_m.hh>
 
-using namespace LocARNA;
+using namespace RNAShiftAlign;
 
 /**
  * @file test_shiftmatrix_m.cc
