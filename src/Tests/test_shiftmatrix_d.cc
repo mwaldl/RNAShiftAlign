@@ -5,7 +5,13 @@
 #include <LocARNA/scoring_fwd.hh>
 #include <RNAShiftAlign/shiftmatrix_d.hh>
 
-using namespace LocARNA;
+using namespace RNAShiftAlign;
+
+// ShiftMatrixD/ShiftOffsetMatrix store infty_score_t elements in production
+// (they use elem_t::neg_infty), so the tests must instantiate them the same
+// way. Note: LocARNA::score_t is a plain `long int` and has no neg_infty, so
+// we deliberately do NOT pull in `using namespace LocARNA` here.
+using elem_t = LocARNA::infty_score_t;
 
 /** @file Unit tests for ShiftOffsetMatrix and ShiftMatrixD classes
  *
@@ -16,7 +22,7 @@ using namespace LocARNA;
 
 TEST_CASE("ShiftOffsetMatrix - Basic operations", "[shiftoffsetmatrix]") {
     size_t max_shift = 1;
-    ShiftOffsetMatrix<score_t> offset_matrix(max_shift);
+    ShiftOffsetMatrix<elem_t> offset_matrix(max_shift);
 
     SECTION("Construction and sizing") {
         REQUIRE(offset_matrix.get_maxshift() == max_shift);
@@ -31,31 +37,31 @@ TEST_CASE("ShiftOffsetMatrix - Basic operations", "[shiftoffsetmatrix]") {
 
     SECTION("Set and get with valid shifts") {
         // Test with shifts in range [-1, 1]
-        score_t test_value = 42;
+        elem_t test_value = elem_t(42);
         offset_matrix.set(0, 0, 0, 0, test_value);
         REQUIRE(offset_matrix.get(0, 0, 0, 0) == test_value);
 
-        offset_matrix.set(-1, 1, 0, -1, 100);
-        REQUIRE(offset_matrix.get(-1, 1, 0, -1) == 100);
+        offset_matrix.set(-1, 1, 0, -1, elem_t(100));
+        REQUIRE(offset_matrix.get(-1, 1, 0, -1) == elem_t(100));
 
-        offset_matrix.set(1, 1, 1, 1, 200);
-        REQUIRE(offset_matrix.get(1, 1, 1, 1) == 200);
+        offset_matrix.set(1, 1, 1, 1, elem_t(200));
+        REQUIRE(offset_matrix.get(1, 1, 1, 1) == elem_t(200));
     }
 
     SECTION("Operator() access") {
-        offset_matrix(0, 0, 0, 0) = 55;
-        REQUIRE(offset_matrix(0, 0, 0, 0) == 55);
+        offset_matrix(0, 0, 0, 0) = elem_t(55);
+        REQUIRE(offset_matrix(0, 0, 0, 0) == elem_t(55));
 
-        offset_matrix(-1, -1, 1, 1) = 77;
-        REQUIRE(offset_matrix(-1, -1, 1, 1) == 77);
+        offset_matrix(-1, -1, 1, 1) = elem_t(77);
+        REQUIRE(offset_matrix(-1, -1, 1, 1) == elem_t(77));
     }
 
     SECTION("Fill operation") {
-        offset_matrix.fill(99);
+        offset_matrix.fill(elem_t(99));
         // Check a few positions
-        REQUIRE(offset_matrix(0, 0, 0, 0) == 99);
-        REQUIRE(offset_matrix(-1, 0, 1, 0) == 99);
-        REQUIRE(offset_matrix(1, 1, -1, -1) == 99);
+        REQUIRE(offset_matrix(0, 0, 0, 0) == elem_t(99));
+        REQUIRE(offset_matrix(-1, 0, 1, 0) == elem_t(99));
+        REQUIRE(offset_matrix(1, 1, -1, -1) == elem_t(99));
     }
 
     SECTION("Resize operation") {
@@ -67,8 +73,8 @@ TEST_CASE("ShiftOffsetMatrix - Basic operations", "[shiftoffsetmatrix]") {
         REQUIRE(std::get<0>(sizes) == expected_dim);
 
         // Should be able to access with larger shifts
-        CHECK_NOTHROW(offset_matrix.set(-2, 2, -2, 2, 123));
-        REQUIRE(offset_matrix.get(-2, 2, -2, 2) == 123);
+        CHECK_NOTHROW(offset_matrix.set(-2, 2, -2, 2, elem_t(123)));
+        REQUIRE(offset_matrix.get(-2, 2, -2, 2) == elem_t(123));
     }
 }
 
@@ -83,7 +89,7 @@ TEST_CASE("ShiftMatrixD - 6D matrix operations", "[shiftmatrixd]") {
     Arc arc_a(1, 1, 5);   // Base pair at positions 1-5 in RNA A
     Arc arc_b(3, 2, 7);   // Base pair at positions 2-7 in RNA B
 
-    ShiftMatrixD<score_t> d(a_bps, b_bps, max_shift);
+    ShiftMatrixD<elem_t> d(a_bps, b_bps, max_shift);
 
     SECTION("Construction and sizing") {
         REQUIRE(d.get_maxshift() == max_shift);
@@ -98,7 +104,7 @@ TEST_CASE("ShiftMatrixD - 6D matrix operations", "[shiftmatrixd]") {
         d.create_offsetmatrix(1, 3);  // For base pair indices (1,3)
 
         // Set a value
-        score_t test_val = 10;
+        elem_t test_val = elem_t(10);
         d.set(arc_a, arc_b, 1, 2, 5, 7, test_val);
 
         // Get should return the same value
@@ -112,14 +118,14 @@ TEST_CASE("ShiftMatrixD - 6D matrix operations", "[shiftmatrixd]") {
         d.create_offsetmatrix(2, 1);
 
         // Set different values in each
-        d.set(Arc(0, 0, 3), Arc(0, 0, 4), 0, 0, 3, 4, 100);
-        d.set(arc_a, arc_b, 1, 2, 5, 7, 200);
-        d.set(Arc(2, 5, 10), Arc(1, 3, 8), 5, 3, 10, 8, 300);
+        d.set(Arc(0, 0, 3), Arc(0, 0, 4), 0, 0, 3, 4, elem_t(100));
+        d.set(arc_a, arc_b, 1, 2, 5, 7, elem_t(200));
+        d.set(Arc(2, 5, 10), Arc(1, 3, 8), 5, 3, 10, 8, elem_t(300));
 
         // Verify independent storage
-        REQUIRE(d.get(Arc(0, 0, 3), Arc(0, 0, 4), 0, 0, 3, 4) == 100);
-        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 7) == 200);
-        REQUIRE(d.get(Arc(2, 5, 10), Arc(1, 3, 8), 5, 3, 10, 8) == 300);
+        REQUIRE(d.get(Arc(0, 0, 3), Arc(0, 0, 4), 0, 0, 3, 4) == elem_t(100));
+        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 7) == elem_t(200));
+        REQUIRE(d.get(Arc(2, 5, 10), Arc(1, 3, 8), 5, 3, 10, 8) == elem_t(300));
     }
 
     SECTION("Boundary shifts") {
@@ -127,13 +133,13 @@ TEST_CASE("ShiftMatrixD - 6D matrix operations", "[shiftmatrixd]") {
 
         // Test at shift boundaries (-1, 0, 1)
         // arc_b.right() = 7, so valid y2 values are 6, 7, 8 (shifts -1, 0, +1)
-        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 6, 50));  // y2 at boundary (-1)
-        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 7, 60));  // y2 at boundary (0)
-        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 8, 70));  // y2 at boundary (+1)
+        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 6, elem_t(50)));  // y2 at boundary (-1)
+        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 7, elem_t(60)));  // y2 at boundary (0)
+        CHECK_NOTHROW(d.set(arc_a, arc_b, 1, 2, 5, 8, elem_t(70)));  // y2 at boundary (+1)
 
-        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 6) == 50);
-        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 7) == 60);
-        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 8) == 70);
+        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 6) == elem_t(50));
+        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 7) == elem_t(60));
+        REQUIRE(d.get(arc_a, arc_b, 1, 2, 5, 8) == elem_t(70));
     }
 
     SECTION("Accepts various valid arc configurations") {
