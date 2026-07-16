@@ -74,15 +74,15 @@ you can check your build quickly:
 $ rnashiftalign
 ...
 4-Way Bi-Alignment:
-U_A:  CCCCAAAGGG
-Cseq: CCC.AA.GGG
-U_B:  CCCAAAUGGG
-Shft: ==========
-V_A:  CCCCAAAGGG
-db_A: (((....)))
-Cons: (((....)))
-db_B: (((....)))
-V_B:  CCCAAAUGGG
+U_A:  -AAGGCUCUAUUAACUGGUAUCGGCUAUAG
+Cseq: .AA.G.UCUAU.AACUG.UAUC.G.U.UAG
+U_B:  -AAUGAUCUAUGAACUGUUAUCUGAUUUAG
+Shft: S=========================S===
+V_A:  -AAGGCUCUAUUAACUGGUAUCGGCUAUAG
+db_A: -..((((.(((......)))..))))....
+Cons: .(.((((.((((....))))..)))).)..
+db_B: ...((((.(((......)))..))))-...
+V_B:  AAUGAUCUAUGAACUGUUAUCUGAUU-UAG
 ```
 
 Reading the 4-way output:
