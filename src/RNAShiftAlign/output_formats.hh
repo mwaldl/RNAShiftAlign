@@ -93,7 +93,6 @@ format_result_json(const AlignmentResult& r) {
       << "    \"mismatch\": " << r.scoring_params.mismatch << ",\n"
       << "    \"indel\": " << r.scoring_params.indel << ",\n"
       << "    \"struct_weight\": " << r.scoring_params.struct_weight << ",\n"
-      << "    \"tau\": " << r.scoring_params.tau_factor << ",\n"
       << "    \"delta\": " << r.scoring_params.delta << ",\n"
       << "    \"max_shifts\": " << r.scoring_params.max_shifts << ",\n"
       << "    \"min_prob\": " << r.prep_params.min_prob << ",\n"
